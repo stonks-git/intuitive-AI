@@ -1,8 +1,6 @@
 services:
   agent:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/stonks-git/intuititive-identity-ai:latest
     container_name: agent_001
     restart: unless-stopped
     depends_on:
@@ -21,8 +19,8 @@ services:
 
     # VOLUMES — agent's accessible world
     volumes:
-      - /home/stonks/.agent:/home/agent/.agent:rw
-      - /home/stonks/workspace:/home/agent/workspace:rw
+      - ./agent-state:/home/agent/.agent:rw
+      - ./workspace:/home/agent/workspace:rw
 
     # NETWORK — whitelist enforced at container level
     networks:
@@ -32,8 +30,7 @@ services:
     env_file:
       - .env
     environment:
-      - AGENT_DB_PASSWORD=${AGENT_DB_PASSWORD:-agent_secret}
-      - DATABASE_URL=postgresql://agent:${AGENT_DB_PASSWORD:-agent_secret}@localhost:5433/agent_memory
+      - DATABASE_URL=postgresql://agent:${AGENT_DB_PASSWORD:-agent_secret}@postgres:5432/agent_memory
 
     # NO PRIVILEGED ACCESS
     security_opt:
@@ -42,14 +39,9 @@ services:
     tmpfs:
       - /tmp:size=100M
 
-    # HEALTHCHECK
-    ports:
-      - "5433:5432"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import sys; sys.exit(0)"]
-      interval: 60s
-      timeout: 10s
-      retries: 3
+    # Interactive mode (stdin for conversation)
+    stdin_open: true
+    tty: true
 
   # POSTGRES + PGVECTOR — agent's memory store
   postgres:
@@ -70,7 +62,7 @@ services:
     networks:
       - agent_net
     ports:
-      - "5433:5432"
+      - "5433:5432"   # exposed on 5433 (native PG on 5432)
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U agent -d agent_memory"]
       interval: 10s
