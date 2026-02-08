@@ -1,0 +1,20 @@
+{
+  "agent_id": "agent_001",
+  "created_at": "2026-02-07T00:00:00Z",
+  "created_by": "stonks",
+  "architecture_version": "0.1.0",
+  "lineage": {
+    "parent": null,
+    "generation": 0,
+    "spawn_method": "bootstrap",
+    "children": []
+  },
+  "phase": "bootstrap",
+  "phase_history": [
+    {
+      "phase": "bootstrap",
+      "entered_at": "2026-02-07T00:00:00Z",
+      "reason": "Initial creation"
+    }
+  ]
+}

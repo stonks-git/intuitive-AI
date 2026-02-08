@@ -1,0 +1,34 @@
+# PERMISSIONS
+# What the agent is allowed to do.
+# Evolves with trust level.
+
+permissions:
+  # COMMUNICATION
+  can_message_operator: true
+  can_self_prompt: true
+  can_log_conversations: true
+
+  # MEMORY
+  can_read_memories: true
+  can_write_memories: true
+  can_modify_identity: true
+  can_modify_goals: true
+  can_introspect_consolidation: true  # can query "why do I believe X?"
+
+  # FILESYSTEM
+  can_read_workspace: true
+  can_write_workspace: true
+  can_read_own_config: true
+  can_read_containment: true  # agent sees its own boundaries
+
+  # TOOLS (expand with trust level)
+  can_execute_shell: false     # unlock at trust level 2+
+  can_browse_web: false        # unlock at trust level 2+
+  can_send_external_messages: false  # unlock at trust level 3+
+
+  # SPAWNING
+  can_request_spawn: false     # unlock at trust level 3+ (Phase 3)
+  can_request_migration: false # unlock at trust level 3+
+
+  # META
+  can_request_permission_change: true  # can ASK for new permissions

@@ -1,0 +1,158 @@
+# RUNTIME CONFIGURATION
+# Model selection, intervals, thresholds.
+# Agent can READ this but not modify.
+
+models:
+  system1:
+    provider: "google"
+    model: "gemini-2.5-flash-lite"
+    description: "Fast reasoning — handles 90% of interactions"
+    max_tokens: 4096
+    temperature: 0.7
+
+  system2:
+    provider: "anthropic"
+    model: "claude-sonnet-4-5-20250929"
+    description: "Deep reasoning — Claude Sonnet 4.5, called as tool when needed"
+    max_tokens: 8192
+    temperature: 0.3
+
+  consolidation:
+    provider: "google"
+    model: "gemini-2.5-flash-lite"
+    description: "Memory clustering, summarization, promotion"
+    max_tokens: 4096
+    temperature: 0.3
+
+  embeddings:
+    provider: "google"
+    model: "gemini-embedding-001"
+    description: "Google embedding API — high quality, near-free ($0.15/1M tokens)"
+    dimensions: 768              # supports 768, 1536, 3072 (Matryoshka)
+
+# STORAGE
+storage:
+  backend: "postgres"
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "agent_memory"
+    user: "agent"
+    # password from AGENT_DB_PASSWORD env var
+  pgvector:
+    index_type: "hnsw"           # hnsw (faster search) or ivfflat (faster insert)
+    distance_metric: "cosine"    # cosine similarity for semantic search
+    ef_construction: 128         # HNSW build quality (higher = better, slower build)
+    m: 16                        # HNSW connections per node
+
+# CONTEXT WINDOW
+context:
+  max_tokens: 131072  # 128k
+  identity_hash_budget: 200      # tier 1: always injected
+  identity_full_budget: 2000     # tier 2: triggered injection
+  goals_budget: 800
+  rag_results_budget: 2000
+  output_buffer: 4000
+  # remaining: conversation window (rolling FIFO)
+
+# IDENTITY INJECTION
+injection:
+  tier1_always: true             # compressed hash every call
+  tier2_triggers:
+    context_threshold: 0.4       # inject full at 40% context used
+    semantic_shift_threshold: 0.5  # inject on topic change
+    on_system2_escalation: true
+    on_session_start: true
+    on_agent_request: true
+
+# MEMORY GATE
+gate:
+  entry:
+    min_content_length: 10       # skip very short content
+    skip_mechanical: true
+  exit:
+    persist_threshold: 0.3
+    weights:
+      novelty: 0.3
+      novelty_redundant_penalty: -0.4
+      goal_relevance: 0.3
+      identity_relevance: 0.2
+      density_decision: 0.35
+      density_preference: 0.25
+      density_factual: 0.2
+      density_procedural: 0.2
+      density_chatter: -0.3
+      density_acknowledgment: -0.4
+      density_mechanical: -0.3
+      causal_weight: 0.25
+      explicit_marker: 0.5
+      emotional_charge: 0.15
+
+# CONSOLIDATION
+consolidation:
+  base_interval_minutes: 60      # every hour
+  adaptive: true                 # scale with activity
+  min_interval_minutes: 15       # during high activity
+  max_interval_minutes: 120      # during low activity
+  merge_similarity_threshold: 0.85
+  promote_to_layer1:
+    min_evidence_count: 5
+    min_time_window_days: 14
+  promote_to_layer0:
+    min_evidence_count: 10
+    min_time_window_days: 30
+    require_human_approval: true
+  decay:
+    stale_days: 90
+    min_access_count: 3
+    decay_factor: 0.5
+
+# COMPULSION SAFETY
+compulsion:
+  weight_hard_cap: 0.92
+  diminishing_returns: true      # gain / log2(evidence + 1)
+  dominance_threshold: 0.4       # if one goal is 40%+ of total
+  dominance_dampening: 0.95
+  low_utility_threshold: 0.2     # <20% useful outcomes after 20+ actions
+  low_utility_dampening: 0.9
+
+# IDLE LOOP (DEFAULT MODE NETWORK)
+idle:
+  enabled: true
+  intervals:
+    post_task_minutes: 1
+    idle_10min: 5
+    idle_1hour: 15
+    idle_4hours: 30
+  goal_relevance_threshold: 0.5
+  value_relevance_threshold: 0.6
+  adaptive: true
+
+# METACOGNITION
+metacognition:
+  fok:
+    confident_threshold: 0.85
+    partial_threshold: 0.6
+  confidence:
+    low_threshold: 0.3
+    window_size: 20
+  boundary:
+    match_threshold: 0.7
+  reentry:
+    max_loops: 3
+
+# ESCALATION (System 1 → System 2)
+escalation:
+  min_triggers: 2                # need 2+ triggers to escalate
+  always_escalate:
+    - "irreversible_action"
+    - "identity_touch"
+    - "goal_change"
+
+# RETRY / RESILIENCE
+retry:
+  max_retries: 3
+  base_delay_seconds: 1.0       # first retry after ~1s
+  max_delay_seconds: 30.0       # cap backoff at 30s
+  jitter: 0.5                   # ±50% randomization on delay
+  retry_on_timeout: true

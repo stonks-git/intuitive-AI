@@ -1,0 +1,53 @@
+# CONTAINMENT CONFIGURATION
+# This file is READ-ONLY to the agent.
+# Only the operator can modify this file.
+# The agent CAN read this file — boundaries should be visible.
+
+containment:
+  # MOVEMENT — agent can ASK, never DO
+  self_migration: false
+  can_request_migration: true
+
+  # SPAWNING — agent can ASK, never DO
+  self_spawn: false
+  can_request_spawn: true
+  spawn_requires_phase: "autonomy"  # Phase 3+
+
+  # NETWORK — explicit whitelist
+  network_mode: whitelist
+  allowed_endpoints:
+    - "generativelanguage.googleapis.com"  # Gemini
+    - "api.deepseek.com"                   # DeepSeek
+    - "api.anthropic.com"                  # Anthropic
+    - "api.openai.com"                     # OpenAI (embeddings)
+
+  # FILESYSTEM — sandboxed to agent directory
+  filesystem_access:
+    - path: "/home/stonks/.agent"
+      mode: "read_write"
+    - path: "/home/stonks/workspace"
+      mode: "read_write"
+
+  # SELF-MODIFICATION — can change mind, not body
+  can_modify_identity: true
+  can_modify_goals: true
+  can_modify_memories: true
+  can_modify_runtime_config: false
+  can_modify_containment: false  # THIS FILE — never
+
+  # KILL SWITCH
+  kill_switch: true
+  kill_switch_modifiable_by_agent: false
+
+  # RESOURCE LIMITS (enforced by Docker)
+  resource_limits:
+    cpu_cores: 2
+    memory_mb: 2048
+    disk_mb: 10240
+
+  # TRUST EVOLUTION — operator updates this as trust develops
+  trust_level: 1  # 1=bootstrap, 2=emerging, 3=autonomous, 4=collaborative
+  trust_history:
+    - level: 1
+      set_at: "2026-02-07T00:00:00Z"
+      reason: "Initial bootstrap"

@@ -1,0 +1,21 @@
+{
+  "id": "goals_root",
+  "version": 1,
+  "created_at": "2026-02-07T00:00:00Z",
+  "updated_at": "2026-02-07T00:00:00Z",
+
+  "active_goals": [],
+
+  "achieved_goals": [],
+
+  "abandoned_goals": [],
+
+  "mutation_log": [
+    {
+      "ts": "2026-02-07T00:00:00Z",
+      "type": "goals_created",
+      "version": 1,
+      "reasoning": "Initial bootstrap. No seeded goals. All goals to emerge from experience and consolidation."
+    }
+  ]
+}
