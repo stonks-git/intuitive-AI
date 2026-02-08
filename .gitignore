@@ -27,6 +27,9 @@ Thumbs.db
 # Claude Code
 .claude/
 
+# Session handoff (local dev context, not deployed)
+SESSION_HANDOFF.md
+
 # Logs (agent generates these at runtime, not tracked)
 agent-state/logs/
 
