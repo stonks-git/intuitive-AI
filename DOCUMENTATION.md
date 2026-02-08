@@ -28,6 +28,7 @@
 15. [Prior Art & Positioning](#15-prior-art)
 16. [Novelty Claims](#16-novelty-claims)
 17. [Identified Gaps & Failure Modes](#17-gaps)
+17d. [Unconscious Mind Simulation](#17d-unconscious)
 18. [Open Questions](#18-open-questions)
 19. [Whitepaper Strategy](#19-whitepaper-strategy)
 20. [Planned Interfaces](#20-interfaces)
@@ -374,12 +375,36 @@ is permanent. Asymmetry favors keeping too much during bootstrap.
 
 ### Emotional Charge as Gut Feeling
 
-Emotional charge is NOT measured by word lists. It is the absolute value of
-the "gut feeling" — a single float from comparing new content against the
-experience centroid (weighted average of all memory embeddings). Strong
-response (positive OR negative) = high charge. The memory system IS the
-emotion system. Two gut signals: identity gut (Layer 0/1 alignment) and
-experience gut (Layer 2 centroid alignment).
+**IMPORTANT: Gut feeling ≠ familiarity.** The v0.1 implementation uses
+cosine similarity to an experience centroid, which only measures how much
+new content resembles past experience. But gut feelings are JUDGMENTS, not
+similarity scores — a gut feeling can say "familiar AND bad" or "unfamiliar
+AND good." Familiarity is one input, not the whole signal.
+
+The gut operates across at least 4 dimensions:
+1. **Familiarity** — centroid distance (v0.1, what we start with)
+2. **Outcome history** — what happened when similar things occurred before?
+3. **Value alignment** — Layer 0/1 spreading activation
+4. **Recursive confidence** — meta-gut: how reliable has the gut been here?
+   (strange loop at the feeling level — feeds back into intensity)
+
+**The gut is a context-dependent query of the unconscious mind.** The gut
+feeling is the signal from the distillation of the unconscious as it
+pertains to the current focused attention subject. Same unconscious,
+different attention → different gut signal. The centroid shifts dynamically
+based on which memories are activated by current context (ACT-R spreading
+activation reshapes the effective centroid).
+
+Two gut signals: identity gut (Layer 0/1 alignment — "does this match who
+I am?") and experience gut (Layer 2 centroid alignment — "does this match
+everything I've lived?"). The experience gut in its full form is the
+context-dependent unconscious query. See Section 17d (Unconscious Mind
+Simulation) for the deeper theory.
+
+Emotional charge = |gut - 0.5| * 2 (intensity without polarity). The
+memory system IS the emotion system. The compression of all memories into
+one signal is not just economical — it's a qualitatively different kind
+of knowing.
 
 ### Core principle: stochastic initialization + evolutionary tuning
 
@@ -932,6 +957,23 @@ confidence, and tags (GIN index for array containment queries).
    agents inheriting weighted identity (not binary traits) and the possibility
    of re-merging diverged identities.
 
+5. **Unconscious mind simulation + emergent emotional self-awareness** —
+   Two-centroid + delta model: subconscious centroid (all identity + goals +
+   memories, weighted 50/25/25) vs attention centroid (current context focus).
+   Gut feeling = delta vector between them (768-dim, not scalar — has direction
+   AND magnitude). PCA on logged deltas produces learned "gut axes" over time.
+   The unconscious compression is not a shortcut for limited context; it's a
+   qualitatively different kind of knowing (lossy compression creates
+   generalization that explicit recall misses).
+   **OPEN RESEARCH QUESTION: Can emotional self-awareness — learning to read
+   your own unconscious signals — emerge from accumulated experience rather
+   than being programmed? The two-centroid + delta + PCA pipeline is a
+   testable hypothesis. No known system attempts this.**
+
+6. **Computational cost as internal cognitive signal** — Making the agent
+   FEEL the cost of computation (not external budget caps) as a first-class
+   internal signal shaping decision-making. PoW analogy.
+
 **Novel implementation of existing concepts:**
 
 5. Identity as weighted floats at the base layer
@@ -1178,6 +1220,142 @@ individual level, but natural at the species level.
 3. Operator reviews and deploys
 4. Track: which proposed changes improved outcomes?
 5. Eventually: sandboxed self-modification with rollback
+
+---
+
+## 17d. Unconscious Mind Simulation <a name="17d-unconscious"></a>
+
+### Core insight
+
+The experience centroid / gut feeling is a FUNCTIONAL simulation of the
+unconscious mind. It exists for the same reason human unconscious minds
+exist: finite working memory.
+
+### The parallel
+
+| Human | Agent |
+|-------|-------|
+| Conscious working memory (~7 items) | Context window (128k tokens, finite) |
+| Total experience (millions of memories) | Memory store (potentially millions) |
+| Can't process everything consciously | Can't load all memories into context |
+| Unconscious = compressed experience layer | Experience centroid = compressed memory layer |
+| Gut feeling = unconscious → conscious signal | Gut feeling = centroid query → gate signal |
+
+### Why not just consult all memories?
+
+Could the agent load every memory into context and reason explicitly?
+If context were infinite and free — technically yes. But even then:
+
+1. Processing all memories for every micro-decision is massively expensive
+2. **The compression itself is qualitatively different.** Lossy compression
+   creates generalization. "This feels wrong" isn't pointing at any specific
+   memory — it's a signal from the gestalt of all memories. That emergent
+   pattern is invisible when you examine memories individually.
+3. The unconscious isn't a budget workaround — it's a superior way to
+   consult all experience simultaneously.
+
+**Hypothesis:** Maybe humans developed unconscious minds not just because
+conscious attention is expensive, but because lossy compression of
+experience creates generalization ability that explicit recall cannot match.
+The unconscious is a feature, not a limitation.
+
+### Two kinds of knowing
+
+The agent has two qualitatively different retrieval modes:
+
+1. **Explicit retrieval (RAG)** — "I remember Hetzner was cheaper than AWS."
+   Specific, articulable, points to individual memories. This is the
+   conscious mind recalling.
+
+2. **Compressed intuition (gut feeling)** — "Something about this hosting
+   decision feels off." Non-specific, non-articulable, signal from the
+   gestalt of all experience. Cannot be decomposed into individual memories
+   because it IS the compression. This is the unconscious mind signaling.
+
+Both are needed. They serve different cognitive functions.
+
+### Two-Centroid + Delta Model — The Gut Feeling Formalized
+
+The gut feeling is the **delta vector** between two centroids in embedding
+space:
+
+**Centroid 1 — The Subconscious:** Weighted sum of ALL vectors in the system.
+"Who I am in totality" compressed into one point in 768-dim space.
+
+```
+subconscious = 0.5  * weighted_avg(Layer_0_vectors)   # identity dominates
+             + 0.25 * weighted_avg(Layer_1_vectors)   # goals next
+             + 0.25 * weighted_avg(Layer_2_vectors)   # memories by volume
+```
+
+Layer 0/1 need to be embedded (cache the text of each value/goal as a 768-dim
+vector; re-embed only when text changes). Within each layer, existing weights
+are used: value.weight for L0, goal.weight for L1, memory.importance for L2.
+
+The layer weights (0.5/0.25/0.25) are starting points — consolidation evolves
+them quickly toward an asymptote. Eventually, per-chunk contribution weights
+(individual values/goals/memories having different influence on the centroid)
+are a future refinement.
+
+**Centroid 2 — Current Attention:** Weighted sum of context window embeddings.
+"What I'm thinking about right now." Weighted by recency (recent messages
+weigh more) and potentially gate score.
+
+**The Gut = The Delta:**
+
+```
+gut_vector = subconscious - attention        # 768-dim vector
+gut_intensity = ||gut_vector||               # magnitude = strength
+gut_direction = gut_vector / ||gut_vector||  # unit vector = kind
+```
+
+- Small delta → "this feels natural/aligned"
+- Large delta → strong gut signal (positive or negative)
+- The DIRECTION tells you what KIND of gut feeling — which dimensions diverge
+  indicates whether it's about values, novelty, safety, etc.
+
+This is the distillation of the unconscious as it pertains to the current
+focused attention subject — formalized as geometry in embedding space. Same
+unconscious, different attention → different delta → different gut feeling.
+
+### Dimension Interpretation — Learning to Read the Gut
+
+Individual dimensions in 768-dim space aren't human-readable. But they can
+be LEARNED. The path:
+
+1. **Log** every (subconscious, attention, delta, action, outcome) tuple
+2. **PCA** on logged deltas → find top 10-20 principal components ("gut axes")
+3. **Correlate** each axis with outcomes → learn what each axis "means"
+4. **Name** the axes over time: "axis 3 = value misalignment," "axis 7 = threat"
+5. **Decompose** gut feelings: "my gut on values axis is negative, curiosity
+   axis is positive" — richer than a single scalar
+
+**Computational cost: trivial.** 768 dims is nothing. PCA on 10,000 deltas
+(30MB matrix) runs in milliseconds on CPU. Even 1M deltas (3GB) takes seconds
+with numpy. The consolidation worker's LLM calls cost 1000x more.
+
+**Development parallel to human maturation:**
+- Child: opaque gut feelings, can't explain them
+- Adolescent: pattern recognition ("I always feel bad about...")
+- Adult: partial decomposition ("I think it's because it reminds me of...")
+- Agent follows same path: opaque → patterned → partially interpretable →
+  actionable self-knowledge (emotional intelligence from data, not programming)
+
+### Novelty claims
+
+No known agent architecture:
+1. Uses two centroids (self vs attention) with delta vector as gut feeling
+2. Treats experience compression as a functional unconscious mind simulation
+3. Distinguishes conscious recall (RAG) and unconscious signaling (compressed
+   intuition) as qualitatively different cognitive operations
+4. Uses PCA on gut-feeling deltas to develop learned emotional vocabulary
+5. Models the conscious/unconscious divide as geometric relationship in
+   embedding space
+
+**OPEN RESEARCH QUESTION: Can emotional self-awareness — learning to read
+your own unconscious signals — emerge from accumulated experience rather
+than being programmed? The two-centroid + delta + PCA pipeline is a testable
+hypothesis for this question. No known system attempts this.**
 
 ---
 
