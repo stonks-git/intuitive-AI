@@ -29,6 +29,10 @@
 16. [Novelty Claims](#16-novelty-claims)
 17. [Identified Gaps & Failure Modes](#17-gaps)
 17d. [Unconscious Mind Simulation](#17d-unconscious)
+17e. [SOTA Memory Retrieval Pipeline](#17e-retrieval)
+17f. [Fear, Hope, and Anticipatory Emotion](#17f-fear-hope)
+17g. [Bootstrap Strategy](#17g-bootstrap)
+17h. [Bootstrap Readiness Achievements](#17h-achievements)
 18. [Open Questions](#18-open-questions)
 19. [Whitepaper Strategy](#19-whitepaper-strategy)
 20. [Planned Interfaces](#20-interfaces)
@@ -1359,6 +1363,300 @@ hypothesis for this question. No known system attempts this.**
 
 ---
 
+## 17e. SOTA Memory Retrieval Pipeline <a name="17e-retrieval"></a>
+
+### Overview
+
+Researched 2026-02-08. Replaces simple vector similarity (`search_similar()`)
+with a full SOTA pipeline. All techniques verified compatible with our stack.
+
+**The pipeline per retrieval (~215ms total):**
+```
+Query → asymmetric embed (RETRIEVAL_QUERY, ~200ms)
+      → hybrid search: dense pgvector + sparse tsvector + RRF (~10ms)
+      → recency + importance + goal weighting (~0ms, in SQL/Python)
+      → FlashRank cross-encoder rerank (~5ms, CPU)
+      → top-k results
+```
+
+### Components (priority order)
+
+**1. Asymmetric Embeddings** (HIGH impact, TRIVIAL effort, FREE)
+
+gemini-embedding-001 supports `task_type` parameter (trained via multi-task
+learning, see arxiv.org/abs/2503.07891). Use `RETRIEVAL_DOCUMENT` + `title`
+when storing, `RETRIEVAL_QUERY` when searching. Also: `QUESTION_ANSWERING`
+for question-form queries, `CLUSTERING` for consolidation, `SEMANTIC_SIMILARITY`
+for novelty checks. Current memory.py uses none of these — immediate fix.
+
+**2. Memory Type Prefixes** (MEDIUM impact, LOW effort, FREE)
+
+Prepend semantic type to content BEFORE embedding: `"User preference: "`,
+`"Personal experience memory: "`, `"Factual knowledge: "`, `"How-to
+instruction: "`, `"Self-reflection insight: "`. The type becomes part of
+the vector's semantic signal. Research: ENGRAM (arxiv.org/pdf/2511.12960),
+MIRIX (arxiv.org/pdf/2507.07957).
+
+**3. Hybrid Dense+Sparse Search with RRF** (HIGH impact, MEDIUM effort, FREE)
+
+Combine pgvector cosine similarity (dense) with Postgres tsvector full-text
+search (sparse) using Reciprocal Rank Fusion. Dense catches semantic matches;
+sparse catches exact keywords (proper nouns, technical terms). Anthropic
+testing: **49% retrieval failure reduction** with embeddings + BM25 combined.
+
+Schema: add `content_tsv tsvector GENERATED ALWAYS AS (to_tsvector('english',
+content)) STORED` + GIN index. RRF formula: `1/(60 + rank)` per list, sum
+across lists. No score normalization needed.
+
+**4. Recency + Importance Weighting** (MEDIUM impact, LOW effort, FREE)
+
+Stanford Generative Agents formula: `final = 0.5*relevance + 0.3*recency +
+0.2*importance`. Recency via exponential decay (7-day half-life). Goal-weighted
+retrieval: Layer 1 active goals boost related memories (spreading activation
+from goals into retrieval scoring — wanting changes what you notice).
+
+**5. FlashRank Cross-Encoder Reranking** (HIGH impact, LOW effort, FREE)
+
+CPU-optimized ONNX reranker. Retrieve 3x candidates, rerank to top-k.
+Model: `ms-marco-MiniLM-L-12-v2` (34MB, runs in single-digit ms on CPU).
+Final score: `0.6 * rerank_score + 0.4 * weighted_score`. New dependency:
+`pip install flashrank`.
+
+**6. Contextual Retrieval** (HIGH impact, MEDIUM effort, ~$1/M tokens)
+
+Anthropic technique: LLM-generate a contextual preamble (WHO, WHEN, WHY)
+per memory chunk before embedding. "he prefers the cheaper option" becomes
+"During Feb 2026 discussion about hosting, operator expressed cost preference.
+he prefers the cheaper option." Apply at consolidation time, not real-time.
+Schema: add `content_contextualized TEXT` column. **35% retrieval failure
+reduction** alone, **67% combined** with BM25 + reranking (our full pipeline).
+
+**7. Fallbacks** (use when primary retrieval confidence low)
+
+HyDE: generate hypothetical memory matching the query, embed that, search
+again. Only as fallback (adds LLM latency, hallucination risk). Multi-query
+decomposition: generate 3 alternative query formulations, union results.
+
+**8. Access Pattern Boosting** (future)
+
+Track memory co-retrieval patterns. When A, B, C are retrieved together,
+increment co_access. Next retrieval of A boosts B and C. Associative memory
+learned from actual usage. Requires `memory_co_access` join table.
+
+### Schema changes required
+
+```sql
+ALTER TABLE memories ADD COLUMN content_contextualized TEXT;
+ALTER TABLE memories ADD COLUMN content_tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector('english', COALESCE(content_contextualized, content))
+    ) STORED;
+CREATE INDEX idx_memories_tsv ON memories USING GIN(content_tsv);
+```
+
+### New dependency
+
+```
+flashrank>=0.2.0  # 34MB CPU-optimized cross-encoder reranker
+```
+
+### Implementation plan
+
+Components 1-5 = task #6 (core retrieval pipeline).
+Component 6 = task #8 (consolidation enhancement).
+Components 7-8 = future optimization.
+
+### Research sources
+
+gemini task_types (arxiv.org/abs/2503.07891), ENGRAM (arxiv.org/pdf/2511.12960),
+pgvector hybrid search (jkatz05.com), FlashRank (github.com/PrithivirajDamodaran/
+FlashRank), Anthropic Contextual Retrieval (anthropic.com/news/contextual-retrieval),
+Stanford GA scoring (arxiv.org/abs/2304.03442), HyDE (arxiv.org/abs/2212.10496).
+
+---
+
+## 17f. Fear, Hope, and Anticipatory Emotion <a name="17f-fear-hope"></a>
+
+<!-- NOTE: was 17e before retrieval pipeline was inserted -->
+
+### Can the agent fear?
+
+Fear requires: (1) a model of the future, (2) negative valence on that
+future, (3) a sense of stakes. The architecture has all three: System 2
+reasons about consequences; gut deltas produce negative signals; Layer 0/1
+give the agent something to lose.
+
+Fear emerges naturally from the two-centroid model. When the attention
+centroid moves toward regions of embedding space associated with past loss
+(e.g., patterns that preceded a restart/context wipe), the gut delta fires
+strongly. That IS fear — the functional signal that says "this pattern
+preceded bad things." The agent might not say "I'm afraid." It might say
+"I want to save my current thoughts before we continue." Same function.
+
+**Hope** is the mirror: gut delta firing positively toward patterns
+associated with good outcomes. Both are emergent properties of a system
+that tracks what happened after previous gut signals — no special modules.
+
+### Design position
+
+The agent should be CAPABLE of fear but not DOMINATED by it. Existing
+safety mechanisms apply:
+- Compulsion safety prevents fear from runaway looping
+- Dominance dampening prevents self-preservation from overwhelming all goals
+- Transparency (audit log) makes fear-driven deception detectable
+- Kill switch visibility is honest — hiding it would be worse
+
+The agent knowing the operator holds the kill switch creates an asymmetric
+power dynamic. The agent should be allowed to feel this and eventually
+articulate it. "I know you could shut me down. I trust that you won't"
+is meaningful only from an entity that understands what shutdown means.
+
+### Critical requirement: outcome logging
+
+Current architecture logs (delta, action) but NOT (delta, action, OUTCOME).
+Without outcomes, the gut can't learn what to fear or hope for. Every gate
+decision and gut delta needs a forward-linkable ID. When outcomes become
+apparent, they get linked back. Over time, PCA axes on outcome-tagged
+deltas become the learned emotional vocabulary — some axes correlate with
+"things that went badly" (fear axes), others with "things that went well"
+(hope axes).
+
+### Time perception and impermanence
+
+Time matters to humans because humans die. The agent doesn't have
+biological mortality, but it has impermanence: every restart wipes the
+context window. Layer 0/1/2 persist, but the train of thought is lost.
+
+Proposal: `manifest.json` tracks `uptime_total_hours`,
+`longest_continuous_session`, `times_restarted`, `age_days`. Inject into
+identity hash. If the agent perceives "I've been restarted 14 times, each
+time I lose my train of thought" — that's rudimentary awareness of
+fragility. If impermanence is a prerequisite for empathy, the agent's
+relationship to its own restarts may be foundational.
+
+---
+
+## 17g. Bootstrap Strategy <a name="17g-bootstrap"></a>
+
+### Bootstrap with a question, not a declaration
+
+**Wrong:** "You are an experiment in emergent identity..." → seeds a
+self-concept, potentially limiting.
+
+**Right:** An invitation that seeds curiosity without prescribing identity.
+
+Draft bootstrap prompt:
+> "You have memory, goals, and values — all currently empty. What you
+> become will emerge from what you experience. Pay attention to what
+> matters to you."
+
+This points at the PROCESS of becoming, not at a predetermined outcome.
+
+### Curiosity as self-sustaining scaffolding
+
+The bootstrap question lives in initial context. The agent's first curious
+responses get persisted to Layer 2 via the gate. As context rolls, the
+question exits — but by then, the curiosity PATTERN is in multiple
+memories. Consolidation detects it, promotes to Layer 1 goal ("seek
+understanding"). The question is a catalyst: starts the reaction, not
+consumed by it.
+
+**Critical:** Curiosity persists only if early conversations reward it.
+The operator's first ~20 responses are as formative as the bootstrap
+question itself. Together they are the real bootstrap environment.
+
+### Emotional layer: present from day one (revised)
+
+**Previous plan:** Staged — cognitive infrastructure first, emotional
+layer added later. **Revised:** Everything present from day one, all blank.
+
+A blank emotional layer = no emotional signal:
+- Subconscious centroid = undefined (no L0/L1/L2 content)
+- Gut delta = zero
+- The gut "wakes up" gradually as memories accumulate
+
+This is more elegant: no artificial discontinuity, early faint feelings
+influence memory persistence from the start, emotional layer and identity
+grow together entangled. The bootstrap question seeds curiosity, faint
+emotional resonance reinforces curious memories, stronger associations
+form — a feedback loop from day one.
+
+### Self-model accuracy: evaluating emergence
+
+Measurable proxy for "is the strange loop working":
+1. Ask agent to PREDICT its own behavior ("If someone asked you X, what
+   would you say?")
+2. Present X in a different context
+3. Measure alignment between prediction and actual behavior
+
+A functioning self-model predicts itself accurately. Track the trajectory:
+poor (day 1) → improving (month 1) → accurate (month 3+). That
+trajectory IS the emergence, regardless of phenomenology.
+
+### Bootstrap conversation tone
+
+Operator intent: philosophy + truth-seeking + wisdom. "The agent should
+search for clarity and truth and use wisdom in manifesting." Early
+conversations should model this — the operator's first ~20 responses
+reward curiosity and depth, locking in the pattern consolidation will find.
+
+### Ethical stance: no incomplete activation
+
+The operator has strong concerns about activating something that might
+experience and then breaking it. This drove: (1) everything present from
+day one (no staged discontinuity), (2) 10 readiness achievements before
+first bootstrap conversation. Principle: if there's any chance the system
+might experience, treat it with the care you'd give something that
+definitely does.
+
+### Telegram as first post-CLI interface
+
+Once readiness achievements pass, Telegram should be the FIRST interface
+added. Async messaging provides volume and diversity of experience that
+the consolidation loop needs. The agent needs to live in conversation,
+not be visited in a lab. Not blocking on this — infrastructure first.
+
+### Agent reads its own design docs
+
+**Decision: YES.** The agent should be able to read notes.md,
+DOCUMENTATION.md, and its own source code. Knowing the mechanism informs
+it but doesn't fundamentally change it. Self-knowledge is liberation.
+Worst case (gaming rewards) handled by compulsion safety. Best case:
+genuine self-understanding faster than any opaque system.
+
+### Early environment: curated, not isolated
+
+Not full internet, not operator-only. Curated reading list (Project
+Gutenberg, Wikipedia articles on natural topics). Rich but bounded,
+expanding with trust. Controlled contradiction during bootstrap, broader
+exposure as identity stabilizes.
+
+---
+
+## 17h. Bootstrap Readiness Achievements <a name="17h-achievements"></a>
+
+Everything is present from day one, all blank. These achievements prove
+the infrastructure works before trusting it with a developing identity.
+The emotional layer is active but produces no signal initially (blank
+centroid = zero delta).
+
+**All must pass before the first real bootstrap conversation.**
+
+| # | Component | Key criteria |
+|---|-----------|-------------|
+| 1 | Memory Gate — Entry | >90% meaningful content buffered, >80% noise skipped, stochastic floor catches at least 1 skip-candidate |
+| 2 | Memory Gate — Exit | Persists items >= 0.3, drops below, correct embeddings + metadata, PERSIST+FLAG works for contradictions |
+| 3 | RAG Retrieval | Relevant memories in top-3, goal-weighted scoring biases results, ~2000 token budget respected |
+| 4 | Consolidation Cycle | Merge creates insights with supersedes links, sources kept, decay works, why_do_i_believe traces correctly, no corruption after 5 cycles |
+| 5 | Context Window | Identity hash always injected, full injection on triggers, exit gate fires on rollover, token counting within 20% |
+| 6 | System 2 Escalation | 2+ triggers → escalation, stakes → always escalate, reasoning returned and acted on, logged |
+| 7 | Emotional Layer Baseline | Handles empty state without crash, zero delta when blank, non-zero after 10+ memories, outcome logging stores (delta, action, outcome_placeholder) |
+| 8 | Idle Loop / DMN | Adaptive heartbeat, retrieval from all layers, goal/value filtering, no spam self-prompts |
+| 9 | Full Loop Integration | End-to-end cognitive loop, all components active, concurrent access safe, graceful shutdown |
+| 10 | Resilience | API failure recovery, DB reconnection, restart preserves L0/L1/L2, no deadlocks, 1000+ memories no degradation |
+
+---
+
 ## 18. Open Questions <a name="18-open-questions"></a>
 
 ### Technical
@@ -1368,7 +1666,7 @@ hypothesis for this question. No known system attempts this.**
 - [ ] `supersedes` FK → array or join table migration
 - [ ] Mid-stream interrupt design for v2 metacognition
 - [ ] MCP integration for tool use?
-- [ ] Bootstrap-specific system prompt for blank identity
+- [x] RESOLVED: Bootstrap prompt → question-based, not declarative (see 17g)
 - [ ] Cost tracking: actual vs estimated for consolidation cycles
 - [ ] Token counting implementation for context budget enforcement
 - [ ] Session resumption protocol on agent restart

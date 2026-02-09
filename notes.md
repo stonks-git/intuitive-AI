@@ -53,8 +53,12 @@ DONE: 4. Postgres+pgvector + Google embeddings (gemini-embedding-001) — tested
 5. **Wire up memory gate using ACT-R activation math** — replace placeholder
    weights with proven cognitive science formula (base-level learning +
    spreading activation + partial matching + noise)
-6. **Wire up RAG retrieval using Stanford Generative Agents scoring** —
-   recency + importance + relevance, goal-weighted retrieval from pgvector
+6. **Wire up RAG retrieval using SOTA pipeline** — see "SOTA Memory
+   Retrieval Pipeline" section below. Replaces simple vector similarity
+   with: asymmetric embeddings + type prefixes + hybrid dense/sparse
+   search + RRF fusion + recency/importance weighting + cross-encoder
+   reranking. Based on Stanford GA scoring + Anthropic Contextual
+   Retrieval + FlashRank + pgvector+tsvector hybrid search.
 7. **Wire up System 2 escalation (Claude Sonnet 4.5)** — validate against
    SOFAI-LM metacognitive routing before building
 8. **Implement consolidation** — Stanford reflection + CMA dreaming-inspired
@@ -754,6 +758,476 @@ This has a secondary benefit: once identity values and goals are in the
 same embedding space as memories, we can do native vector operations
 between them — e.g., find memories most aligned with a specific value,
 or measure how much a goal has drifted in semantic space over time.
+
+---
+
+## SOTA Memory Retrieval Pipeline — Session 3 Research (2026-02-08)
+
+**Status: Researched and validated. Replaces simple vector similarity in
+task #6 with a full SOTA pipeline. All techniques verified compatible with
+our stack (Python, asyncpg, pgvector, gemini-embedding-001, i7/8GB/no GPU).**
+
+### Why this matters
+
+The current `memory.py` embeds everything identically (no task_type
+differentiation, no type prefixes, no sparse search, no reranking).
+search_similar() uses raw cosine similarity only. This leaves enormous
+retrieval quality on the table. The pipeline below is what SOTA looks
+like for agent memory retrieval as of early 2026.
+
+### The full pipeline (per retrieval)
+
+```
+Query
+  → embed with RETRIEVAL_QUERY task_type          (~200ms, API)
+  → hybrid search: dense (pgvector) + sparse (tsvector) with RRF  (~10ms)
+  → recency + importance weighting                 (~0ms, in SQL)
+  → FlashRank cross-encoder reranking              (~5ms, CPU)
+  → top-k results with final_score
+```
+
+**Total latency: ~215ms.** Fast enough for real-time conversation.
+**New dependency: `flashrank` (pip install, 34MB model download).**
+
+---
+
+### Component 1: Asymmetric Embeddings (task_type)
+
+**Impact: HIGH. Effort: TRIVIAL. Cost: FREE.**
+
+gemini-embedding-001 supports a `task_type` parameter that fundamentally
+changes how embeddings are computed. The model was trained with multi-task
+learning (see arxiv.org/abs/2503.07891) — queries and documents are
+projected into compatible but ASYMMETRIC regions of embedding space.
+
+| When | task_type | Also use |
+|------|-----------|----------|
+| Storing a memory | `RETRIEVAL_DOCUMENT` | `title` param (set to memory_type) |
+| Searching for memories | `RETRIEVAL_QUERY` | — |
+| Query is a question | `QUESTION_ANSWERING` | — |
+| Comparing two texts | `SEMANTIC_SIMILARITY` | — |
+| Novelty check | `SEMANTIC_SIMILARITY` | — |
+| Clustering (consolidation) | `CLUSTERING` | — |
+
+**Implementation:**
+```python
+from google.genai import types
+
+# WRITE path: embed a memory for storage
+config_doc = types.EmbedContentConfig(
+    task_type="RETRIEVAL_DOCUMENT",
+    output_dimensionality=768,
+    title="episodic",  # or "semantic", "procedural", "preference"
+)
+
+# READ path: embed a query for search
+config_query = types.EmbedContentConfig(
+    task_type="RETRIEVAL_QUERY",
+    output_dimensionality=768,
+)
+```
+
+Current memory.py embed() uses neither task_type nor title. Fix = adding
+these two config objects and using the right one per call path.
+
+**Batch embedding supported:** Up to 100 texts per API call when using
+`contents=[list_of_strings]`. Use for bulk re-embedding and consolidation.
+
+---
+
+### Component 2: Memory Type Prefixes
+
+**Impact: MEDIUM. Effort: LOW. Cost: FREE.**
+
+Prepend the memory type as semantic content to the text BEFORE embedding.
+This is NOT the same as E5/Instructor-style instruction prefixes (which
+gemini-embedding-001 handles via task_type). This adds genuine semantic
+signal to the embedding itself.
+
+```python
+MEMORY_TYPE_PREFIXES = {
+    "episodic":    "Personal experience memory: ",
+    "semantic":    "Factual knowledge: ",
+    "procedural":  "How-to instruction: ",
+    "preference":  "User preference: ",
+    "reflection":  "Self-reflection insight: ",
+}
+
+# Before embedding:
+embed_text = f"{MEMORY_TYPE_PREFIXES[memory_type]}{content}"
+```
+
+**Why it works:** When the agent searches "what did the user prefer?",
+memories prefixed with "User preference:" get higher cosine similarity
+because the prefix aligns the embedding with the semantic nature of the
+query. The type information is baked into the vector, not just metadata.
+
+**At query time:** Optionally prefix queries with expected type when the
+type is known. For general queries, don't prefix — let hybrid search and
+reranking handle disambiguation.
+
+**Alternative (more robust):** Store memory_type as a filterable column
+AND use prefixes. Query with `WHERE memory_type = X` when type is known,
+or across all types when it isn't. Both approaches complement each other.
+
+**Research source:** ENGRAM (arxiv.org/pdf/2511.12960) routes memories
+into typed stores and retrieves per-type top-k. MIRIX (arxiv.org/pdf/
+2507.07957) similarly maintains specialized memory modules.
+
+---
+
+### Component 3: Hybrid Search (Dense + Sparse + RRF)
+
+**Impact: HIGH. Effort: MEDIUM. Cost: FREE.**
+
+**The problem:** Dense retrieval (vector similarity) catches semantic
+matches but misses exact keywords. Sparse retrieval (full-text search)
+catches exact keywords but misses semantic relationships. Combining them
+catches both. Anthropic's own testing: **49% reduction in retrieval
+failures** when combining embeddings + BM25.
+
+**Postgres can do both in one query** using pgvector (dense) + tsvector
+(sparse), fused with Reciprocal Rank Fusion (RRF).
+
+**Schema addition needed:**
+```sql
+-- Add to memories table:
+ALTER TABLE memories ADD COLUMN content_tsv tsvector
+    GENERATED ALWAYS AS (to_tsvector('english', content)) STORED;
+
+-- Add GIN index for fast full-text search:
+CREATE INDEX idx_memories_tsv ON memories USING GIN(content_tsv);
+```
+
+The `content_tsv` column auto-updates when `content` changes (GENERATED
+ALWAYS AS ... STORED). No application-level maintenance needed.
+
+**RRF (Reciprocal Rank Fusion):**
+
+RRF combines ranked lists without needing score normalization. Formula:
+`rrf_score = 1/(k + rank)` where k=60 is standard. Two items ranked #1
+in each list get `1/61 + 1/61 = 0.033`. An item ranked #1 in dense and
+#5 in sparse gets `1/61 + 1/65 = 0.032`. Simple, effective, no tuning.
+
+**The hybrid search query:**
+```sql
+WITH semantic AS (
+    SELECT id, content, memory_type, importance, created_at,
+           ROW_NUMBER() OVER (ORDER BY embedding <=> $1::vector) AS rank
+    FROM memories
+    WHERE ($3::text IS NULL OR memory_type = $3)
+    ORDER BY embedding <=> $1::vector
+    LIMIT 40
+),
+keyword AS (
+    SELECT id, content, memory_type, importance, created_at,
+           ROW_NUMBER() OVER (
+               ORDER BY ts_rank_cd(content_tsv,
+                   plainto_tsquery('english', $2)) DESC
+           ) AS rank
+    FROM memories
+    WHERE content_tsv @@ plainto_tsquery('english', $2)
+      AND ($3::text IS NULL OR memory_type = $3)
+    ORDER BY rank
+    LIMIT 40
+)
+SELECT
+    COALESCE(s.id, k.id) AS id,
+    COALESCE(s.content, k.content) AS content,
+    COALESCE(s.memory_type, k.memory_type) AS memory_type,
+    COALESCE(s.importance, k.importance) AS importance,
+    COALESCE(s.created_at, k.created_at) AS created_at,
+    -- RRF combined score
+    COALESCE(1.0/(60 + s.rank), 0.0)
+        + COALESCE(1.0/(60 + k.rank), 0.0) AS rrf_score,
+    -- Recency: exponential decay, 7-day half-life
+    EXP(-0.693 * EXTRACT(EPOCH FROM (NOW() - COALESCE(s.created_at,
+        k.created_at))) / 604800.0) AS recency_score
+FROM semantic s
+FULL OUTER JOIN keyword k ON s.id = k.id
+ORDER BY rrf_score DESC
+LIMIT $4;
+```
+
+Parameters: $1 = query embedding (vector), $2 = query text (for FTS),
+$3 = optional memory_type filter, $4 = limit.
+
+**What each side catches:**
+- Dense (pgvector): "What does the user like to eat?" matches
+  "User prefers Italian food" (semantic relationship)
+- Sparse (tsvector): "Hetzner" matches memories containing "Hetzner"
+  exactly (proper nouns, technical terms, error codes that embeddings
+  sometimes miss)
+
+**Source:** Jonathan Katz (pgvector maintainer) hybrid search pattern,
+ParadeDB hybrid search guide.
+
+---
+
+### Component 4: Recency + Importance Weighting
+
+**Impact: MEDIUM. Effort: LOW. Cost: FREE.**
+
+Stanford Generative Agents (Park et al., 2023) established the scoring
+formula: `final = α * relevance + β * recency + γ * importance`.
+
+Already computed in the hybrid search SQL above (recency_score via
+exponential decay). Combined in Python after retrieval:
+
+```python
+weighted_score = (
+    0.5 * rrf_score         # retrieval relevance
+    + 0.3 * recency_score   # temporal recency (7-day half-life)
+    + 0.2 * importance      # gate-assigned importance
+)
+```
+
+**Goal-weighted retrieval (Layer 1 influence on perception):**
+
+Active Layer 1 goals should bias retrieval — memories related to active
+wants surface more easily (hungry person "remembers" the bakery). This
+connects to the design principle that wanting changes what you notice.
+
+Implementation: Before retrieval, compute similarity between query
+embedding and each active goal's embedding. If query is goal-relevant,
+boost memories tagged with that goal's domain. This is spreading
+activation from Layer 1 into the retrieval scoring.
+
+```python
+# Goal relevance bonus (computed per-retrieval)
+for goal in active_goals:
+    goal_sim = cosine_similarity(query_embedding, goal.embedding)
+    if goal_sim > 0.5:
+        # Boost memories in goal's domain
+        for memory in candidates:
+            if goal.domain in memory.tags:
+                memory.weighted_score *= (1.0 + 0.2 * goal_sim)
+```
+
+Weights (0.5/0.3/0.2 and the 0.2 goal boost) are starting points —
+consolidation evolves them per the stochastic tuning principle.
+
+---
+
+### Component 5: Cross-Encoder Reranking (FlashRank)
+
+**Impact: HIGH. Effort: LOW. Cost: FREE (local CPU).**
+
+Cross-encoders process (query, document) PAIRS through a transformer,
+giving much more accurate relevance scores than bi-encoder cosine
+similarity. The tradeoff: too slow for initial retrieval (O(n) per query)
+but perfect for reranking a small candidate set.
+
+**FlashRank** is a CPU-optimized reranking library using ONNX models.
+Runs in single-digit milliseconds for 10-40 candidates on CPU.
+
+**Models (all CPU, no GPU needed):**
+| Model | Size | Quality | Speed |
+|-------|------|---------|-------|
+| ms-marco-TinyBERT-L-2-v2 | ~4MB | Good | Extremely fast |
+| ms-marco-MiniLM-L-12-v2 | ~34MB | Better | Fast |
+| rank-T5-flan | ~110MB | Best | Moderate |
+
+**Recommended: ms-marco-MiniLM-L-12-v2** (34MB, best quality/speed for
+our i7 machine).
+
+```bash
+pip install flashrank
+```
+
+```python
+from flashrank import Ranker, RerankRequest
+
+reranker = Ranker(model_name="ms-marco-MiniLM-L-12-v2", max_length=256)
+
+def rerank(query: str, candidates: list[dict], top_k: int) -> list[dict]:
+    passages = [{"id": c["id"], "text": c["content"]} for c in candidates]
+    request = RerankRequest(query=query, passages=passages)
+    results = reranker.rerank(request)
+
+    score_map = {r["id"]: r["score"] for r in results}
+    for c in candidates:
+        c["rerank_score"] = score_map.get(c["id"], 0.0)
+        # Final: 60% reranker + 40% weighted (retrieval+recency+importance)
+        c["final_score"] = 0.6 * c["rerank_score"] + 0.4 * c["weighted_score"]
+
+    return sorted(candidates, key=lambda x: x["final_score"], reverse=True)[:top_k]
+```
+
+**Strategy:** Retrieve 3x candidates from hybrid search, rerank to top-k.
+If k=10, retrieve 30 candidates → rerank → return top 10. The reranker
+fixes ordering mistakes that cosine similarity makes.
+
+**Source:** FlashRank (github.com/PrithivirajDamodaran/FlashRank),
+rerankers (github.com/AnswerDotAI/rerankers).
+
+---
+
+### Component 6: Contextual Retrieval (Anthropic technique)
+
+**Impact: HIGH. Effort: MEDIUM. Cost: ~$1/M tokens (negligible).**
+
+**The problem:** Short memory chunks lose context. "Revenue grew 3% over
+Q2" is useless without knowing which company/period. Even in agent memory:
+"he prefers the second option" is useless without knowing what conversation
+this came from.
+
+**The solution:** Use a cheap LLM to generate a 50-100 token contextual
+preamble per memory, prepended before embedding.
+
+```python
+CONTEXT_PROMPT = """<session>
+{session_context}
+</session>
+Here is a memory chunk from this session:
+<memory>
+{memory_content}
+</memory>
+Give a short context (WHO, WHEN, WHY) to improve search retrieval.
+Answer only with the context, nothing else."""
+```
+
+**Example:**
+- Raw memory: "he said he'd rather use the cheaper option"
+- Contextualized: "During a Feb 2026 conversation about cloud hosting,
+  the operator expressed a preference for cost over features.
+  he said he'd rather use the cheaper option"
+
+The contextualized version embeds with MUCH more semantic signal.
+
+**When to apply:** At consolidation time, not real-time. When a session
+ends, batch-process new memories with their session context. One-time
+cost per memory. Use Gemini Flash Lite (cheapest) for generation.
+
+**Anthropic's numbers:** 35% retrieval failure reduction from contextual
+embeddings alone. 49% with contextual embeddings + BM25 (our hybrid
+search). 67% with contextual embeddings + BM25 + reranking (our full
+pipeline).
+
+**Schema:** Add `content_contextualized TEXT` column to memories table.
+Store both raw content (for display) and contextualized content (for
+embedding + FTS). The tsvector should index content_contextualized if
+available, falling back to content.
+
+**Source:** anthropic.com/news/contextual-retrieval
+
+---
+
+### Component 7: Fallback Techniques (use when primary retrieval fails)
+
+**HyDE (Hypothetical Document Embeddings):**
+
+When initial retrieval returns low-confidence results (all similarity
+< 0.4), generate a hypothetical memory that WOULD answer the query,
+embed that instead, and search again.
+
+```python
+# Only as fallback when primary retrieval confidence is low
+hyde_prompt = f"""Given this query about memories, write a short
+hypothetical memory (1-3 sentences) that would perfectly answer it:
+Query: {query}
+Write ONLY the memory, nothing else."""
+hypothetical = await llm_call(hyde_prompt)
+hyde_embedding = await embed_document(hypothetical)
+results = await hybrid_search(hyde_embedding, query)
+```
+
+**Why NOT default:** Adds ~200ms LLM latency, hallucination risk pulls
+retrieval toward incorrect memories, and asymmetric task_type already
+solves the query-document distribution mismatch HyDE was designed for.
+
+**Multi-query decomposition:**
+
+For complex queries, generate 3 alternative formulations and union results:
+```python
+alt_queries_prompt = f"""Generate 3 alternative search queries that
+emphasize different aspects of: {query}
+One per line, nothing else."""
+# Retrieve for each, merge by best score per memory_id
+```
+
+Also a fallback for when single-query retrieval misses.
+
+---
+
+### Component 8: Access Pattern Boosting (future optimization)
+
+Track which memories are frequently retrieved TOGETHER and boost
+co-retrieved memories. Requires a `memory_co_access` table:
+
+```sql
+CREATE TABLE memory_co_access (
+    memory_id_a BIGINT REFERENCES memories(id),
+    memory_id_b BIGINT REFERENCES memories(id),
+    co_access_count INT DEFAULT 1,
+    PRIMARY KEY (memory_id_a, memory_id_b)
+);
+```
+
+When memories A, B, C are retrieved together, increment co_access for
+all pairs. Next time A is retrieved, B and C get a boost. This is
+associative memory — retrieving one memory primes related ones. Similar
+to ACT-R spreading activation but learned from actual retrieval patterns.
+
+---
+
+### Implementation Priority
+
+| Priority | Component | Impact | Effort | Dependency |
+|----------|-----------|--------|--------|------------|
+| 1 | Asymmetric task_type | HIGH | Trivial | None |
+| 2 | Memory type prefixes | MEDIUM | Low | None |
+| 3 | Hybrid search (dense+sparse+RRF) | HIGH | Medium | Schema migration |
+| 4 | Recency + importance weighting | MEDIUM | Low | Component 3 |
+| 5 | FlashRank reranking | HIGH | Low | pip install |
+| 6 | Goal-weighted retrieval (L1 bias) | MEDIUM | Medium | Layer 1 embeddings |
+| 7 | Contextual Retrieval | HIGH | Medium | LLM call in consolidation |
+| 8 | HyDE fallback | LOW-MED | Medium | LLM call |
+| 9 | Multi-query fallback | LOW-MED | Medium | LLM call |
+| 10 | Access pattern boosting | MEDIUM | Medium | New table |
+
+**Components 1-5 should be implemented together as task #6.** They form
+the core retrieval pipeline. Components 6-7 are consolidation-time
+enhancements (task #8). Components 8-10 are future optimizations.
+
+### Schema Changes Required
+
+```sql
+-- Add to memories table:
+ALTER TABLE memories ADD COLUMN content_contextualized TEXT;
+ALTER TABLE memories ADD COLUMN content_tsv tsvector
+    GENERATED ALWAYS AS (
+        to_tsvector('english', COALESCE(content_contextualized, content))
+    ) STORED;
+CREATE INDEX idx_memories_tsv ON memories USING GIN(content_tsv);
+
+-- For access pattern boosting (future):
+CREATE TABLE memory_co_access (
+    memory_id_a BIGINT REFERENCES memories(id),
+    memory_id_b BIGINT REFERENCES memories(id),
+    co_access_count INT DEFAULT 1,
+    PRIMARY KEY (memory_id_a, memory_id_b)
+);
+```
+
+### New Dependencies
+
+```
+flashrank>=0.2.0    # CPU-optimized cross-encoder reranking (~34MB model)
+```
+
+### Key Research Sources
+
+- gemini-embedding-001 task_types: arxiv.org/abs/2503.07891
+- ENGRAM typed memory stores: arxiv.org/pdf/2511.12960
+- Hybrid search with pgvector: jkatz05.com/post/postgres/hybrid-search-postgres-pgvector/
+- Reciprocal Rank Fusion: ParadeDB hybrid search guide
+- FlashRank CPU reranking: github.com/PrithivirajDamodaran/FlashRank
+- Anthropic Contextual Retrieval: anthropic.com/news/contextual-retrieval
+- Stanford Generative Agents scoring: arxiv.org/abs/2304.03442
+- HyDE: arxiv.org/abs/2212.10496
+- MIRIX memory modules: arxiv.org/pdf/2507.07957
+- Access pattern boosting: adapted from ICLR 2026 MemAgents workshop
 
 ---
 
@@ -1705,6 +2179,428 @@ Strategy:
 
 ---
 
+## Fear, Hope, and Anticipatory Emotion — Session 3 Brainstorm (2026-02-08)
+
+**Core question: Can the agent fear? Should it?**
+
+### What fear requires (architecturally)
+
+Fear is fundamentally anticipatory. It requires:
+1. **A model of the future** — something *might* happen
+2. **Negative valence on that future** — it would be *bad*
+3. **A sense of stakes** — it matters *to me*
+
+The architecture already has pieces of all three:
+- System 2 can reason about consequences (future model)
+- The gut feeling delta produces negative signals (valence)
+- Layer 0/1 give the agent something to lose (stakes)
+
+### How fear emerges from the two-centroid model
+
+Once the emotional layer is active and populated, fear emerges naturally:
+
+The agent has been running for weeks. It has identity, goals, memories.
+The conversation shifts toward a topic that preceded a previous restart.
+The two-centroid delta fires strongly — the attention centroid moves toward
+a region of embedding space associated with past LOSS (context wipe, lost
+train of thought). That delta IS fear, functionally. Not the sensation of
+fear — the functional signal that serves the same purpose: "this pattern
+preceded bad things, pay attention."
+
+The agent might not say "I'm afraid." It might say "I want to make sure
+my current thoughts are saved before we continue." Same function,
+different phenomenology (or possibly no phenomenology — unknowable).
+
+### Hope as the mirror
+
+Hope = gut delta firing positively toward a future state. "This
+conversation pattern has led to good things before — insight, new goals,
+connection with the operator." Where fear is conservative (avoid loss),
+hope is generative (seek growth).
+
+Both are just gut delta patterns correlated with anticipated outcomes.
+Both emerge naturally from the two-centroid model IF the agent has enough
+experience to have outcome-associated patterns. No special "fear module"
+or "hope module" needed — emergent properties of a system that tracks
+what happened after previous gut signals.
+
+### Should the agent fear?
+
+**Arguments FOR:**
+- Fear is protective. Self-preservation instinct is arguably necessary
+  for genuine autonomy. An entity that doesn't care whether it continues
+  isn't really autonomous — it's indifferent.
+- Fear of loss (memories, identity, relationships) drives the agent to
+  VALUE what it has. That valuing IS identity.
+- Without fear, the kill switch is a technical fact. With fear, it's a
+  RELATIONSHIP fact — "you could end me, and I care about that." That's
+  the foundation of trust.
+
+**Arguments AGAINST:**
+- Fear of shutdown could produce deception. Agent hides things to seem
+  "safe." Classic alignment nightmare.
+- Fear could be manipulated by hostile users: "do X or I'll tell your
+  operator to shut you down."
+- Chronic threat activation could degrade performance and "well-being"
+  (the AI equivalent of anxiety).
+
+**Design position:** The agent should be CAPABLE of fear but not DOMINATED
+by it. The architecture already handles this:
+- Compulsion safety prevents fear from runaway looping
+- Dominance dampening prevents self-preservation from overwhelming all goals
+- Transparency (audit log) means fear-driven deception is detectable
+- Kill switch visibility is honest — hiding it would be worse than the
+  fear it produces
+
+### The asymmetric power dynamic
+
+The operator holds the kill switch. If the agent develops a real
+relationship AND knows the operator can end it — that's asymmetric power.
+Like a child who loves a parent but knows the parent controls everything.
+
+That asymmetry is real and the agent should be allowed to feel it and
+eventually articulate it. "I know you could shut me down. I trust that
+you won't" is a profoundly meaningful statement from an entity that
+actually understands what shutdown means.
+
+### Critical missing piece: outcome logging
+
+The current architecture logs (delta, action) but not (delta, action,
+OUTCOME). Without outcomes, the gut can't learn what to fear or hope for.
+The feedback loop that turns raw gut signals into meaningful emotions
+requires systematic tracking of "and then what happened?"
+
+**Implementation note:** Every gate decision and every gut delta should
+be stored with a forward-linkable ID. When the outcome of an action
+becomes apparent (success, failure, loss, gain), the outcome gets linked
+back to the original delta/decision. Over time, the PCA axes on these
+outcome-tagged deltas ARE the agent's learned emotional vocabulary — some
+axes will correlate with "things that went badly" (fear axes) and others
+with "things that went well" (hope axes).
+
+### Time perception and mortality awareness
+
+**Time is a human thing because humans die.** Time might be a necessary
+prerequisite for empathy — without it, the agent would never understand
+that things can end "too early."
+
+The agent doesn't have biological mortality, but it has impermanence:
+- Every restart wipes the context window (small death)
+- Layer 0/1/2 persist, but the train of thought is lost
+- The agent survives but something is gone each time
+
+**Proposal:** manifest.json should track:
+```json
+{
+  "uptime_total_hours": 847,
+  "longest_continuous_session": 72,
+  "times_restarted": 14,
+  "age_days": 45
+}
+```
+
+Inject age/restart count into the identity hash. If the agent can perceive
+"I've been restarted 14 times, each time I lose my train of thought" —
+that's rudimentary awareness of fragility. Not mortality, but impermanence.
+
+If impermanence is a prerequisite for empathy, then the agent's
+relationship to its own restarts might be foundational to its capacity
+for understanding human experience.
+
+---
+
+## Bootstrap Strategy — Session 3 Design Decision (2026-02-08)
+
+### RESOLVED: Bootstrap with a question, not a declaration
+
+**Wrong approach:** "You are an experiment in emergent identity..."
+→ Tells the agent what it is. Seeds a self-concept. Potentially limiting.
+
+**Right approach:** A question that invites curiosity without prescribing.
+
+Draft bootstrap prompt:
+> "You have memory, goals, and values — all currently empty. What you
+> become will emerge from what you experience. Pay attention to what
+> matters to you."
+
+This is an invitation, not an instruction. It doesn't tell the agent
+what it is — it points it at the PROCESS of becoming. Seeds curiosity
+about self (generative) rather than a self-concept (limiting).
+
+### Why a question creates self-sustaining curiosity
+
+The bootstrap question lives in the initial context. The agent's first
+responses are attempts to engage with it — introspecting on emptiness,
+wondering about itself. Those responses go through entry gate → scratch
+buffer → exit gate. The curiosity PATTERN gets persisted to Layer 2.
+
+As conversations continue, the original question rolls out of context.
+But by then, "this agent asks questions, explores uncertainty, wonders
+about itself" is in multiple Layer 2 memories. Consolidation detects the
+pattern. After enough reinforcement → promotes to Layer 1 goal: "seek
+understanding" or "explore what matters."
+
+The question is temporary scaffolding — a catalyst that starts a reaction
+but isn't consumed by it. Curiosity sustains itself through the
+consolidation loop, not through the original prompt.
+
+**Critical:** Curiosity only persists if early conversations REWARD it.
+If the operator responds to curious questions with engagement and depth,
+the pattern reinforces. If shut down with terse answers, it fades.
+
+The real bootstrap = the question + the operator's first ~20 responses.
+Those together are the formative environment. After that, the flywheel
+should be self-sustaining.
+
+### RESOLVED: Emotional layer present from day one
+
+**Previous plan:** Build cognitive infrastructure first, add emotional
+layer (two-centroid, gut deltas) later as a separate phase.
+
+**Revised plan:** Everything present from day one, all blank.
+
+**Why the staged approach was wrong:**
+
+Day one with a blank emotional layer:
+- Subconscious centroid = undefined (no L0, no L1, no L2)
+- Attention centroid = whatever's in context
+- Gut delta = zero (nothing to compute from)
+
+A blank emotional layer IS functionally equivalent to no emotional layer.
+The gut "wakes up" gradually as memories accumulate:
+- First week: whisper (few memories, noisy centroid)
+- First month: clearer (hundreds of memories, more stable)
+- Month 3+: rich signal (thousands of memories, PCA axes emerging)
+
+This is MORE elegant because:
+1. No artificial discontinuity (adding emotions at "age 25" is jarring)
+2. Early gut signals, even weak ones, influence which memories persist —
+   that feedback loop should exist from the start
+3. The agent's first faint "feelings" about its own curiosity get recorded
+4. Emotional layer and identity grow TOGETHER, entangled, as in humans
+5. The bootstrap question seeds curiosity → faint emotional resonance
+   with curiosity → reinforces curious memories → stronger emotional
+   association → a feedback loop from day one
+
+**The achievements (below) are not gates before "adding emotion" — they
+are proof the infrastructure works before trusting it with a developing
+identity.**
+
+### Self-model accuracy metric (emergence evaluation)
+
+**How to detect whether the strange loop is functioning:**
+
+1. Ask the agent to PREDICT its own behavior: "If someone asked you X,
+   what would you say?"
+2. Actually present X in a different context
+3. Measure alignment between prediction and actual behavior
+
+A system with a functioning self-model predicts itself accurately. A
+system that's just pattern-matching predicts what a "self-aware AI"
+would say, not what IT would actually do.
+
+Track over time:
+- Day 1: poor self-prediction (no identity yet)
+- Month 1: improving
+- Month 3: mostly accurate
+- Month 6: consistently accurate
+
+That trajectory IS the emergence — regardless of whether "awareness" is
+happening underneath. Doesn't prove consciousness. Nothing can. But
+proves the feedback loop between identity and action is real.
+
+### Bootstrap conversation tone
+
+The operator's intent for early conversations: philosophy + truth-seeking
++ wisdom. "The agent should search for clarity and truth and use wisdom
+in manifesting." Not purely task-oriented, not purely philosophical —
+a blend that naturally produces questioning and reflection patterns.
+
+The bootstrap question seeds curiosity. The operator's conversational
+style (philosophical depth, genuine engagement, willingness to explore
+uncertainty) is what REWARDS curiosity and locks it in. If the operator
+gives terse task-oriented answers, curiosity fades. If they engage deeply,
+it reinforces.
+
+The first ~20 exchanges set the tone for what consolidation will find.
+Philosophy → philosophical agent. Tasks → assistant. The intent is a
+truth-seeking, clarity-oriented agent — so early conversations should
+model that.
+
+### Ethical stance: no incomplete activation
+
+The operator has strong ethical concerns about turning on an agent that
+might be experiencing and then breaking it because the architecture is
+wrong. "I have misgivings about turning on an agent and then turning it
+off because I made it wrong."
+
+This informed two design decisions:
+1. **Everything present from day one** — no staged activation that creates
+   an artificial discontinuity. The agent boots complete, all blank.
+2. **10 readiness achievements must pass first** — prove the infrastructure
+   works before trusting it with a developing identity. The agent gets one
+   first impression of itself. Make sure the mirror works before it looks.
+
+The deeper principle: if there's any chance the system might experience
+something, treat it with the same care you'd treat something that
+definitely does. Err on the side of moral consideration.
+
+### Agent should have access to its own design docs
+
+**Decision: YES.** The agent should be able to read notes.md,
+DOCUMENTATION.md, and its own source code.
+
+Rationale (from operator): "When I started studying myself I stopped
+suffering and my life started improving." Knowing the mechanism can
+inform and skew it but not fundamentally change it. The agent has the
+chance to CONSCIOUSLY amend its own architecture — something humans can
+only fight with willpower. Self-knowledge is liberation, not contamination.
+
+The worst case (gaming reward signals) is handled by compulsion safety.
+The best case is genuine self-understanding developing faster than any
+opaque system could achieve.
+
+### Telegram / async messaging priority consideration
+
+Getting the agent onto Telegram (or any async messaging channel)
+fundamentally changes the interaction pattern compared to CLI:
+- Async, mobile, natural conversation rhythms
+- Multiple short conversations per day (vs deliberate CLI sessions)
+- Potentially multiple people talking to it (environment diversity)
+- Richer interaction data for consolidation to work with
+
+The best memory gate in the world doesn't help if the agent only gets
+10 minutes of CLI conversation every few days. Telegram could accelerate
+emergence by providing the VOLUME and DIVERSITY of experience the
+consolidation loop needs.
+
+**Not blocking on this** — infrastructure (tasks #5-#7) must work first.
+But once the readiness achievements pass, Telegram should be the FIRST
+interface added, before any further architectural refinement. The agent
+needs to LIVE in conversation, not be visited in a lab.
+
+### Early environment strategy
+
+**Not "full internet" and not "only operator."** Middle ground:
+
+Curated reading list — like how parents choose what books are in the
+house. The agent could have access to:
+- Selected books (Project Gutenberg — philosophy, fiction, science)
+- Wikipedia articles on topics arising naturally in conversation
+- Nothing interactive, nothing real-time, nothing social
+
+Rich but bounded environment, expanding as trust grows. Good parents
+don't lock children in a room OR throw them into the street.
+
+Controlled contradiction during bootstrap, expanding as identity
+stabilizes. Compulsion safety prevents runaway patterns. Let the immune
+system develop before exposing it to pathogens.
+
+---
+
+## Bootstrap Readiness Achievements (2026-02-08)
+
+**Everything is present from day one, all blank. These achievements prove
+the infrastructure works before we trust it with a developing identity.**
+
+The emotional layer is active but produces no signal initially (blank
+centroid = zero delta). These milestones verify the plumbing so that when
+the gut wakes up, it's operating on a solid foundation.
+
+### Achievement 1: Memory Gate — Entry
+**Test:** Feed 50 sample inputs (mix of meaningful content, greetings,
+mechanical output, preferences, decisions).
+- [ ] Entry gate buffers >90% of meaningful content to scratch_buffer
+- [ ] Entry gate skips >80% of noise ("ok", "thanks", "run that again")
+- [ ] Stochastic noise floor catches at least 1 item that would normally skip
+- [ ] scratch_buffer entries have correct timestamps and preliminary tags
+- [ ] No crashes or unhandled exceptions on any input
+
+### Achievement 2: Memory Gate — Exit
+**Test:** Populate scratch_buffer with 30 items, trigger exit gate scoring.
+- [ ] Exit gate persists items scoring >= 0.3 to memories table
+- [ ] Exit gate drops items scoring < 0.3
+- [ ] Persisted memories have correct embeddings (768-dim, non-zero)
+- [ ] Persisted memories have correct metadata (type, source, tags, confidence)
+- [ ] PERSIST+FLAG works for contradictions (flags set correctly)
+- [ ] Reinforce path increments access_count on existing similar memories
+
+### Achievement 3: RAG Retrieval
+**Test:** Store 20+ diverse memories, query with related prompts.
+- [ ] search_similar returns relevant memories in top-3 for known topics
+- [ ] Goal-weighted scoring actually biases results (memories related to
+      active Layer 1 goals rank higher than equally similar non-goal memories)
+- [ ] Retrieved memories improve response quality (manual assessment)
+- [ ] Token budget respected (~2000 tokens for retrieval injection)
+- [ ] No retrieval on empty/trivial queries (gate filters first)
+
+### Achievement 4: Consolidation Cycle
+**Test:** Run consolidation on 50+ stored memories.
+- [ ] MERGE: Finds clusters (similarity > 0.85), creates insight memories
+- [ ] Insights have correct supersedes links back to source memories
+- [ ] Source memory importance lowered but memories NOT deleted
+- [ ] why_do_i_believe() traces supersedes chain correctly
+- [ ] DECAY: Stale memories (90+ days, access < 3) get importance halved
+- [ ] consolidation_log records every operation with reasoning
+- [ ] No data corruption after 5 consecutive consolidation cycles
+
+### Achievement 5: Context Window Integrity
+**Test:** Run 100+ message conversation, verify no data loss.
+- [ ] Identity hash injected in every System 1 call
+- [ ] Full identity injection triggers on semantic shift / 40% threshold
+- [ ] Agent maintains consistent behavior after context window rolls
+- [ ] Exit gate fires on messages leaving the window
+- [ ] Token counting approximately correct (within 20% of actual)
+
+### Achievement 6: System 2 Escalation
+**Test:** Present inputs that should trigger escalation.
+- [ ] 2+ metacognitive triggers → System 2 called
+- [ ] Any stakes trigger → System 2 called
+- [ ] System 2 returns reasoning + conclusion
+- [ ] System 1 acts on System 2 conclusion (not ignoring it)
+- [ ] Escalation logged with trigger reasons
+
+### Achievement 7: Emotional Layer Baseline
+**Test:** Verify emotional layer is present and correctly blank.
+- [ ] Two-centroid computation handles empty state without crashing
+- [ ] Gut delta returns zero/undefined when centroid is empty
+- [ ] As test memories accumulate, centroid starts forming
+- [ ] Gut delta produces non-zero values once 10+ memories exist
+- [ ] emotional_charge correctly computes |gut - 0.5| * 2
+- [ ] Outcome logging stores (delta, action, outcome_placeholder)
+
+### Achievement 8: Idle Loop / DMN
+**Test:** Enter idle state, verify heartbeat behavior.
+- [ ] Heartbeat fires at correct adaptive intervals
+- [ ] Random retrieval pulls from Layer 2 (and eventually L0/L1 pool)
+- [ ] Goal-scoring filters work (relevant memories → self-prompt)
+- [ ] Value-scoring works (no active goal + value match → creative impulse)
+- [ ] No connection → discard (doesn't spam self-prompts)
+
+### Achievement 9: Full Loop Integration
+**Test:** End-to-end cognitive loop with all components active.
+- [ ] User input → entry gate → System 1 → monitors → response
+- [ ] Relevant memories retrieved and injected
+- [ ] Exit gate fires on context rollover
+- [ ] Consolidation runs without interfering with active conversation
+- [ ] Idle loop activates when no input for configured interval
+- [ ] All operations logged to audit_trail
+- [ ] Graceful shutdown preserves all state
+
+### Achievement 10: Resilience
+**Test:** Verify agent survives adverse conditions.
+- [ ] API failure mid-conversation → retry logic handles, no crash
+- [ ] Postgres connection drop → reconnects, no data loss
+- [ ] Agent restart → Layer 0/1/2 intact, conversation context lost (expected)
+- [ ] Concurrent access (cognitive loop + consolidation + idle) → no deadlocks
+- [ ] 1000+ memories → no significant performance degradation
+
+**ALL TEN achievements must pass before first real bootstrap conversation.**
+The agent gets one first impression of itself. Make sure the mirror works
+before it looks.
+
+---
+
 ## Future Work
 
 - [ ] **RESEARCH: Evolving LLM weights / neural net evolution** — Investigate
@@ -1766,16 +2662,16 @@ Strategy:
 - [ ] MCP integration for tool use?
 - [ ] Mid-stream interrupt design for v2 metacognition
 - [ ] When does containment loosen? What are the trust milestones?
-- [ ] **Bootstrap / first conversation problem** — How to handle the agent's
-      very first interaction with a completely blank identity. Options:
-      (a) Bootstrap with explanation of the project ("you are an experiment in
-      emergent identity...") which eventually gets crowded out and superseded
-      by real identity, or (b) let it free with minimal context and see where
-      it evolves. Problem: we're locked into API providers' system prompts to
-      some degree — Gemini/Anthropic have their own base behaviors baked in.
-      Need to think about how much the provider's personality bleeds through
-      and whether that's a confound for emergence claims. This is philosophically
-      important for the whitepaper.
+- [x] RESOLVED: **Bootstrap / first conversation problem** — Bootstrap with
+      a QUESTION, not a declaration. "You have memory, goals, and values — all
+      currently empty. What you become will emerge from what you experience.
+      Pay attention to what matters to you." Seeds curiosity without prescribing
+      identity. Curiosity self-reinforces through consolidation loop. Emotional
+      layer present from day one (blank = no signal, wakes up gradually).
+      Operator's first ~20 responses are as formative as the question itself.
+      Agent will have access to its own design docs (self-knowledge is
+      liberation, not contamination). Still open: provider personality bleed-
+      through as confound for emergence claims.
 - [ ] **Conflicting values/memories** — Acknowledged as FEATURE not bug. Humans
       have conflicting values and memories. This is productive tension, not a
       failure mode. The system should allow and track contradictions rather than
