@@ -194,14 +194,63 @@ Machine: norisor.local (i7-3740QM, 8GB RAM, Debian)
     └── agent_postgres      pgvector/pgvector:pg17 on port 5433
 ```
 
-### Model stack (current)
+### Model stack (v4 — optimized for $100/month budget)
 
-| Role | Provider | Model | Rationale |
-|------|----------|-------|-----------|
-| System 1 (fast) | Google | gemini-2.5-flash-lite | Near-free, fast, good enough for 90% of interactions |
-| System 2 (deep) | Anthropic | claude-sonnet-4-5-20250929 | Strong reasoning for escalation cases; original plan was DeepSeek R1, upgraded for quality |
-| Embeddings | Google | gemini-embedding-001 | High quality, $0.15/1M tokens (near-free), eliminates need for local Ollama |
-| Consolidation | Google | gemini-2.5-flash-lite | Cheap, sufficient for clustering and summarization |
+**Researched:** 2026-02-09 (Session 9). Pricing verified against official API docs.
+
+| Role | Provider | Model | $/month (est.) | Rationale |
+|------|----------|-------|----------------|-----------|
+| System 1 (fast, 30K calls/mo) | Google | Gemini 2.5 Flash Lite | $12.00 | Cheapest tier, 1M context, $0.10/$0.40 per 1M tokens |
+| System 2 (reasoning, 3K calls/mo) | DeepSeek | DeepSeek R1 | $14.82 | Best reasoning-per-dollar. $0.55/$2.19 per 1M. Fallback: Gemini 2.5 Pro ($48.75) |
+| Gate micro-calls (60K calls/mo) | OpenAI | GPT-4.1 nano | $4.20 | $0.10/$0.40 per 1M — same price as Flash Lite BUT has logprobs for gate confidence |
+| Consolidation (500 calls/mo) | Google | Gemini 2.5 Pro | $7.50 | Low volume, insight quality matters. $1.25/$10.00 per 1M |
+| DMN idle loop (5K calls/mo) | Google | Gemini 2.5 Flash | $6.00 | Step up from Lite — thinking budget helps associative/creative tasks. $0.30/$2.50 per 1M |
+| Contextual retrieval (10K calls/mo) | Google | Gemini 2.5 Flash Lite | $1.40 | Simple summarization, cheapest wins |
+| Embeddings | Google | Gemini text-embedding-004 | $0.00 | **Free** via Google AI API. 768-dim native. |
+| **TOTAL** | | | **$45.92** | $54 headroom for spikes, retries, DeepSeek outage fallback |
+
+**Alternative allocations:**
+
+| Profile | System 2 Model | Total | Headroom |
+|---------|---------------|-------|----------|
+| **Budget-optimized** (above) | DeepSeek R1 | $45.92 | $54.08 |
+| **Reliability-focused** (no DeepSeek) | Gemini 2.5 Pro | $79.85 | $20.15 |
+| **Ultra-budget** ($36 target) | DeepSeek R1 + Flash Lite everywhere | $35.97 | $64.03 |
+
+### Full model pricing reference (February 2026)
+
+| Model | Input/1M | Output/1M | Context | Logprobs | Tier |
+|---|---|---|---|---|---|
+| Gemini 2.5 Flash Lite | $0.10 | $0.40 | 1M | Yes | Budget |
+| Gemini 2.5 Flash | $0.30 | $2.50 | 1M | Yes | Mid |
+| Gemini 2.5 Pro | $1.25 | $10.00 | 1M (2x over 200K) | Yes | Premium |
+| GPT-4.1 nano | $0.10 | $0.40 | 1M | Yes | Budget |
+| GPT-4.1 mini | $0.40 | $1.60 | 1M | Yes | Mid |
+| GPT-4o-mini | $0.15 | $0.60 | 128K | Yes | Budget |
+| GPT-4o | $2.50 | $10.00 | 128K | Yes | Premium |
+| GPT-4.1 | $2.00 | $8.00 | 1M | Yes | Premium |
+| Claude Haiku 3.5 | $0.80 | $4.00 | 200K | No | Budget-Mid |
+| Claude Haiku 4.5 | $1.00 | $5.00 | 200K | No | Mid |
+| Claude Sonnet 4.5 | $3.00 | $15.00 | 200K (1M beta) | No | Premium |
+| Claude Opus 4.6 | $5.00 | $25.00 | 200K (1M beta) | No | Ultra |
+| DeepSeek V3.2 (chat) | $0.28 | $0.42 | 128K | Yes (chat) | Budget |
+| DeepSeek V3.2 (cache hit) | $0.028 | $0.42 | 128K | Yes | Budget |
+| DeepSeek R1 (reasoner) | $0.55 | $2.19 | 128K | No | Mid-Premium |
+
+| Embedding Model | Price/1M tokens | Dimensions | Notes |
+|---|---|---|---|
+| Gemini text-embedding-004 | **FREE** | 768 | Free on Google AI, paid on Vertex |
+| OpenAI text-embedding-3-small | $0.02 | 1536 (configurable) | Batch: $0.01 |
+| OpenAI text-embedding-3-large | $0.13 | 3072 (configurable) | Higher quality |
+
+### Key model selection insights
+
+1. **GPT-4.1 nano for gate micro-calls** — logprobs support gives actual probability scores for binary gate decisions (yes/no, persist/drop) instead of parsing text. Critical for composite confidence (§2.11 in plan v4).
+2. **DeepSeek R1 best reasoning-per-dollar** — 3.3x cheaper than Gemini Pro, 6x cheaper than Claude Sonnet for System 2 volume. Risk: intermittent availability/rate-limiting. Mitigated by $54 headroom for Gemini Pro fallback.
+3. **Claude priced out of budget builds** — even Haiku 3.5 is 8x more expensive than Flash Lite for input. No logprobs. Quality doesn't justify premium for high-volume commodity calls.
+4. **Gemini embeddings free** — removes cost variable entirely.
+5. **Cache strategies** reduce costs further — DeepSeek auto-caching (90% discount on hits), Gemini prompt caching (90% off reads). Stable system prompts on System 1 could drop $12 below $5.
+6. **Multi-provider is optimal** — Gemini for bulk, GPT-4.1 nano for gates (logprobs), DeepSeek/Gemini Pro for reasoning. Diversifies availability risk.
 
 ---
 
