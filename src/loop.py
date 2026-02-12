@@ -28,6 +28,7 @@ from google import genai
 from .llm import retry_llm_call
 from .gate import EntryGate, ExitGate, EntryGateConfig, ExitGateConfig
 from .attention import AttentionAllocator, AttentionCandidate
+from .gut import GutFeeling
 from .context_assembly import assemble_context, render_system_prompt, adaptive_fifo_prune
 from .metacognition import composite_confidence
 from .safety import SafetyMonitor
@@ -254,6 +255,17 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
     memory.safety = safety
     logger.info("Safety monitor initialized (Phase A active, B/C shadow)")
 
+    # Init gut feeling (§5.1) — two-centroid delta model
+    gut = GutFeeling()
+    # Seed subconscious centroid from L0/L1 layer embeddings
+    l0_embs = layers.get_layer_embeddings(0)
+    l1_embs = layers.get_layer_embeddings(1)
+    gut.update_subconscious(
+        l0_embeddings=[vec for _, _, vec in l0_embs] if l0_embs else None,
+        l1_embeddings=[vec for _, _, vec in l1_embs] if l1_embs else None,
+    )
+    logger.info("Gut feeling initialized (subconscious centroid seeded from L0/L1)")
+
     # Conversation history (rolling FIFO)
     conversation = []
     exchange_count = 0
@@ -318,7 +330,7 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
                     handled = await _handle_command(
                         user_input, config, layers, memory, model_name,
                         conversation, exchange_count, entry_gate, exit_gate,
-                        attention,
+                        attention, gut=gut,
                     )
                     if handled:
                         continue
@@ -346,6 +358,7 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
             goal_embeddings = layers.get_all_layer_embeddings()
             winner, losers, cognitive_report = attention.select_winner(
                 goal_embeddings=goal_embeddings if goal_embeddings else None,
+                gut_delta=gut.emotional_charge,
             )
 
             if winner is None:
@@ -353,6 +366,11 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
 
             attention_embedding = winner.embedding
             previous_attention_embedding = attention.previous_attention_embedding
+
+            # Update gut feeling with winner's embedding
+            if attention_embedding is not None:
+                gut.update_attention(attention_embedding)
+                gut.compute_delta(context=winner.content[:200])
 
             # ── Entry gate: winning input ─────────────────────────────
 
@@ -444,10 +462,10 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
                 except Exception as e:
                     logger.debug(f"Correction retrieval failed (non-critical): {e}")
 
-            # Append corrections to system prompt if any
-            active_system_prompt = system_prompt
+            # Append gut feeling + corrections to system prompt
+            active_system_prompt = system_prompt + "\n\n" + gut.gut_summary()
             if correction_context:
-                active_system_prompt = system_prompt + "\n\n" + correction_context
+                active_system_prompt += "\n\n" + correction_context
 
             # ── System 1 LLM call ─────────────────────────────────────
 
@@ -706,7 +724,7 @@ async def _handle_command(
     command: str,
     config, layers, memory, model_name,
     conversation, exchange_count, entry_gate, exit_gate,
-    attention,
+    attention, gut=None,
 ) -> bool:
     """Handle introspection commands. Returns True if handled."""
 
@@ -737,7 +755,8 @@ async def _handle_command(
         print(f"Memories: {mc}")
         print(f"Conversation: {len(conversation)} messages")
         print(f"Exchanges since flush: {exchange_count}/{EXIT_GATE_FLUSH_INTERVAL}")
-        print(f"Attention queue: {attention.queue_size} pending\n")
+        print(f"Attention queue: {attention.queue_size} pending")
+        print(f"Gut: {gut.gut_summary()}\n")
         return True
 
     if command == "/gate":

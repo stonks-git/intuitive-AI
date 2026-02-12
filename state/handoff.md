@@ -80,6 +80,13 @@
 5. FW-001 DONE — framework fully adopted
 6. Added unattended execution directive to CLAUDE.md (temporary, removed by CLEANUP-001)
 7. Added CLEANUP-001 task to roadmap (depends on TEST-002)
+8. WIRE-001 DONE — GutFeeling wired into cognitive loop:
+   - `gut = GutFeeling()` instantiated in loop, subconscious seeded from L0/L1
+   - `gut.update_attention()` + `gut.compute_delta()` called each cycle
+   - `gut.emotional_charge` passed to attention.select_winner()
+   - `gut.gut_summary()` injected into system prompt
+   - `relevance.py` parameter renamed gut_delta→gut_alignment for direct use
+   - `/status` shows gut summary
 
 ---
 
@@ -94,7 +101,7 @@ Cognitive architecture for emergent AI identity. Three-layer memory unified into
 | Task ID | Status |
 |---------|--------|
 | FW-001 | done |
-| WIRE-001 | next - Wire GutFeeling into cognitive loop |
+| WIRE-001 | done |
 | WIRE-002 | next - Wire BootstrapReadiness into cognitive loop |
 | WIRE-003 | next - Wire OutcomeTracker into safety + consolidation |
 
@@ -208,8 +215,8 @@ python3 -m src.main
 ## Git Status
 
 - **Branch:** main
-- **Last commit:** 506ab7e Add peripheral architecture design doc
-- **Modified:** Framework adoption in progress
+- **Last commit:** b95f5da Adopt AI-DEV framework + add unattended execution directive
+- **Modified:** KB/KB_03_cognitive_loop.md, src/loop.py, src/relevance.py, state files
 
 ---
 

@@ -93,7 +93,7 @@
       "intent": "Connect the two-centroid gut model to the live reasoning pipeline",
       "depends_on": ["PLAN-004"],
       "priority": "P1",
-      "status": "todo",
+      "status": "done",
       "owner": "ai",
       "deliverable": "GutFeeling instantiated in loop, subconscious updated on session start, attention updated each cycle, gut_summary injected into system prompt, emotional_alignment wired into relevance.py",
       "acceptance_criteria": [

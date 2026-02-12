@@ -75,11 +75,14 @@ def compute_noise() -> float:
     return random.random()
 
 
-def compute_emotional_alignment(gut_delta: float | None = None) -> float:
-    """Component 4: mood-congruent recall. Neutral until gut feeling (§5.1)."""
-    if gut_delta is None:
+def compute_emotional_alignment(gut_alignment: float | None = None) -> float:
+    """Component 4: mood-congruent recall. Neutral until gut feeling (§5.1).
+
+    Accepts gut.emotional_alignment directly (0-1 range).
+    """
+    if gut_alignment is None:
         return 0.5  # neutral
-    return max(0.0, min(1.0, 0.5 + gut_delta))
+    return max(0.0, min(1.0, gut_alignment))
 
 
 def compute_recency(last_accessed: datetime | None) -> float:
@@ -126,11 +129,14 @@ def compute_hybrid_relevance(
     attention_embedding: np.ndarray | None = None,
     active_memory_ids: list[str] | None = None,
     co_access_scores: dict | None = None,
-    gut_delta: float | None = None,
+    gut_alignment: float | None = None,
     blend_weights: dict[str, float] | None = None,
     memory_count: int = 0,
 ) -> tuple[float, dict]:
     """Compute the 5-component hybrid relevance score.
+
+    Args:
+        gut_alignment: gut.emotional_alignment value (0-1). None = neutral (0.5).
 
     Returns (score, component_breakdown).
     """
@@ -143,7 +149,7 @@ def compute_hybrid_relevance(
             memory_id, active_memory_ids or [], co_access_scores or {},
         ),
         "noise": compute_noise(),
-        "emotional": compute_emotional_alignment(gut_delta),
+        "emotional": compute_emotional_alignment(gut_alignment),
         "recency": compute_recency(last_accessed),
     }
 
