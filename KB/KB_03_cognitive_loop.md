@@ -34,6 +34,14 @@ Losers decay 0.9x per cycle. User messages naturally suppress DMN.
 - **System prompt:** `gut.gut_summary()` injected alongside corrections
 - **Status:** `/status` shows current gut summary
 
+## Bootstrap Readiness Integration (§5.2)
+
+- **Startup:** `bootstrap.check_all()` runs at session start, result shown in banner
+- **Each flush:** `check_all()` re-runs after every exit gate flush (periodic milestone re-check)
+- **System prompt:** `bootstrap.get_bootstrap_prompt()` injected as `[BOOTSTRAP]` section when milestones incomplete
+- **Command:** `/readiness` uses persistent instance (no re-creation)
+- When all 10 milestones achieved, bootstrap prompt stops being injected
+
 ## Escalation Threshold
 
 Adaptive: 0.3 (bootstrap) -> 0.8 (mature).

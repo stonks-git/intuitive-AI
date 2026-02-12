@@ -114,7 +114,7 @@
       "intent": "Check readiness milestones and inject bootstrap prompt when incomplete",
       "depends_on": ["PLAN-004"],
       "priority": "P1",
-      "status": "todo",
+      "status": "done",
       "owner": "ai",
       "deliverable": "BootstrapReadiness.check_all() called periodically, bootstrap prompt injected when not all milestones achieved, /readiness command functional",
       "acceptance_criteria": [

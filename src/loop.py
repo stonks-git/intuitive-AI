@@ -29,6 +29,7 @@ from .llm import retry_llm_call
 from .gate import EntryGate, ExitGate, EntryGateConfig, ExitGateConfig
 from .attention import AttentionAllocator, AttentionCandidate
 from .gut import GutFeeling
+from .bootstrap import BootstrapReadiness
 from .context_assembly import assemble_context, render_system_prompt, adaptive_fifo_prune
 from .metacognition import composite_confidence
 from .safety import SafetyMonitor
@@ -266,6 +267,12 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
     )
     logger.info("Gut feeling initialized (subconscious centroid seeded from L0/L1)")
 
+    # Init bootstrap readiness (§5.2) — 10 milestones
+    bootstrap = BootstrapReadiness()
+    await bootstrap.check_all(memory, layers)
+    achieved, total = bootstrap.progress
+    logger.info(f"Bootstrap readiness: {achieved}/{total} milestones achieved")
+
     # Conversation history (rolling FIFO)
     conversation = []
     exchange_count = 0
@@ -282,6 +289,7 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
     print(f"Memories: {mem_count}")
     print(f"Gates: stochastic entry + ACT-R exit (flush every {EXIT_GATE_FLUSH_INTERVAL} exchanges)")
     print(f"Attention: salience-based allocation active")
+    print(f"Bootstrap: {achieved}/{total} milestones")
     print("=" * 60 + "\n")
 
     while not shutdown_event.is_set():
@@ -330,7 +338,7 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
                     handled = await _handle_command(
                         user_input, config, layers, memory, model_name,
                         conversation, exchange_count, entry_gate, exit_gate,
-                        attention, gut=gut,
+                        attention, gut=gut, bootstrap=bootstrap,
                     )
                     if handled:
                         continue
@@ -462,8 +470,11 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
                 except Exception as e:
                     logger.debug(f"Correction retrieval failed (non-critical): {e}")
 
-            # Append gut feeling + corrections to system prompt
+            # Append gut feeling + bootstrap + corrections to system prompt
             active_system_prompt = system_prompt + "\n\n" + gut.gut_summary()
+            bootstrap_prompt = bootstrap.get_bootstrap_prompt()
+            if bootstrap_prompt:
+                active_system_prompt += "\n\n[BOOTSTRAP]\n" + bootstrap_prompt
             if correction_context:
                 active_system_prompt += "\n\n" + correction_context
 
@@ -607,6 +618,12 @@ async def cognitive_loop(config, layers, memory, shutdown_event, dmn_queue=None)
                 )
                 exchange_count = 0
 
+                # Re-check bootstrap milestones after flush
+                newly = await bootstrap.check_all(memory, layers)
+                if newly:
+                    for a in newly:
+                        logger.info(f"Bootstrap milestone unlocked: {a.name}")
+
             logger.info(
                 f"Cycle: src={winner.source_tag} "
                 f"salience={winner.salience:.3f} "
@@ -724,7 +741,7 @@ async def _handle_command(
     command: str,
     config, layers, memory, model_name,
     conversation, exchange_count, entry_gate, exit_gate,
-    attention, gut=None,
+    attention, gut=None, bootstrap=None,
 ) -> bool:
     """Handle introspection commands. Returns True if handled."""
 
@@ -801,10 +818,11 @@ async def _handle_command(
         return True
 
     if command == "/readiness":
-        from .bootstrap import BootstrapReadiness
-        bootstrap = BootstrapReadiness()
-        await bootstrap.check_all(memory, layers)
-        print(f"\n{bootstrap.render_status()}\n")
+        if bootstrap is not None:
+            await bootstrap.check_all(memory, layers)
+            print(f"\n{bootstrap.render_status()}\n")
+        else:
+            print("\n[Bootstrap not initialized]\n")
         return True
 
     if command.startswith("/docs"):

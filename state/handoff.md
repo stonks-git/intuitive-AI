@@ -87,6 +87,11 @@
    - `gut.gut_summary()` injected into system prompt
    - `relevance.py` parameter renamed gut_delta→gut_alignment for direct use
    - `/status` shows gut summary
+9. WIRE-002 DONE — BootstrapReadiness wired into cognitive loop:
+   - Persistent `BootstrapReadiness` instance in loop
+   - `check_all()` at session start + after each exit gate flush
+   - Bootstrap prompt injected into system prompt when milestones incomplete
+   - `/readiness` uses persistent instance
 
 ---
 
@@ -102,7 +107,7 @@ Cognitive architecture for emergent AI identity. Three-layer memory unified into
 |---------|--------|
 | FW-001 | done |
 | WIRE-001 | done |
-| WIRE-002 | next - Wire BootstrapReadiness into cognitive loop |
+| WIRE-002 | done |
 | WIRE-003 | next - Wire OutcomeTracker into safety + consolidation |
 
 ## What exists
