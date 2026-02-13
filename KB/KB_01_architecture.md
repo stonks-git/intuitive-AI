@@ -28,7 +28,9 @@
 | `config.py` | YAML config loader |
 | `llm.py` | LLM client + EnergyTracker |
 | `tokens.py` | Token counting |
-| `main.py` | Entry point, initialization |
+| `stdin_peripheral.py` | Stdin I/O as a peripheral |
+| `telegram_peripheral.py` | Telegram Bot API peripheral (raw httpx) |
+| `main.py` | Entry point, initialization, peripheral wiring |
 
 ## Tech Stack
 
@@ -42,7 +44,7 @@
 ## Data Flow (Simplified)
 
 ```
-Input sources -> AttentionAllocator (salience competition)
+Peripherals -> input_queue (shared) -> AttentionAllocator (salience competition)
   -> Embed winner
   -> Context Assembly (safety + identity + situational + cognitive state)
   -> FIFO prune

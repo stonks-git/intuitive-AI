@@ -1,15 +1,16 @@
 {
   "meta": {
     "status": "active",
-    "last_updated": "2026-02-12",
-    "session": 6
+    "last_updated": "2026-02-13",
+    "session": 7
   },
   "open_questions": [
     {
       "id": "Q-001",
       "question": "Should integration wiring be done incrementally (one module at a time) or all at once?",
       "blocking": ["WIRE-001", "WIRE-002", "WIRE-003"],
-      "status": "open"
+      "status": "answered",
+      "resolution": "Incremental — one module at a time (WIRE-001, then 002, then 003)"
     }
   ],
   "decisions": [
@@ -36,6 +37,18 @@
       "summary": "Adopted AI-DEV framework for project management",
       "status": "accepted",
       "rationale": "Structured state tracking, validation, KB gate, audit pipeline replace ad-hoc SESSION_HANDOFF.md approach."
+    },
+    {
+      "id": "D-005",
+      "summary": "Peripheral architecture: pluggable I/O via shared asyncio.Queue + reply_fn callbacks",
+      "status": "accepted",
+      "rationale": "Generalizes I/O so any peripheral (Telegram, stdin, future Discord/web) plugs in without touching cognitive loop. reply_fn closure pattern routes responses back to originator."
+    },
+    {
+      "id": "D-006",
+      "summary": "Telegram: raw httpx, no framework dependency, long polling, owner-only auth",
+      "status": "accepted",
+      "rationale": "Zero new dependencies (httpx is transitive dep of anthropic/google-genai). Long polling = outbound only, no public endpoint. Owner ID checked against Telegram server-verified from.id."
     }
   ],
   "tasks": [
@@ -148,10 +161,33 @@
       ]
     },
     {
+      "id": "PERIPH-001",
+      "title": "Peripheral architecture + Telegram bot integration",
+      "intent": "Replace hardcoded stdin I/O with pluggable peripheral architecture. Add Telegram as first external peripheral.",
+      "depends_on": ["WIRE-001", "WIRE-002", "WIRE-003"],
+      "priority": "P1",
+      "status": "done",
+      "owner": "ai",
+      "deliverable": "Unified input_queue architecture, StdinPeripheral, TelegramPeripheral, reply_fn routing in cognitive loop",
+      "acceptance_criteria": [
+        "All peripherals push AttentionCandidate into shared asyncio.Queue",
+        "reply_fn callback routes responses to correct peripheral",
+        "Telegram peripheral connects via long polling, owner-only auth",
+        "stdin factored out as a peripheral",
+        "cognitive loop is I/O-agnostic",
+        "Agent starts with Telegram connected on norisor"
+      ],
+      "verification": [
+        "py_compile on all changed src/*.py files",
+        "Agent starts on norisor, Telegram peripheral logs connection",
+        "Message from Telegram wins attention and gets processed"
+      ]
+    },
+    {
       "id": "TEST-001",
       "title": "End-to-end runtime test on norisor",
       "intent": "Deploy and run a real conversation through the full pipeline",
-      "depends_on": ["WIRE-001", "WIRE-002", "WIRE-003"],
+      "depends_on": ["PERIPH-001"],
       "priority": "P1",
       "status": "todo",
       "owner": "ai",

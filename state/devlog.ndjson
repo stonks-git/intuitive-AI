@@ -6,3 +6,10 @@
 {"ts":"2026-02-12T11:00:00Z","type":"kb_update","msg":"KB_03_cognitive_loop.md updated with bootstrap readiness integration section."}
 {"ts":"2026-02-12T11:30:00Z","type":"milestone","msg":"WIRE-003 done. OutcomeTracker wired: gate decisions recorded in exit flush, promotions recorded in consolidation, gut deltas forward-linked to outcomes."}
 {"ts":"2026-02-12T11:30:00Z","type":"kb_update","msg":"KB_03_cognitive_loop.md updated with OutcomeTracker integration section."}
+{"ts":"2026-02-13T10:00:00Z","type":"milestone","msg":"PERIPH-001 code complete. Built peripheral architecture: unified input_queue, StdinPeripheral, TelegramPeripheral (raw httpx, long polling, owner-only auth), reply_fn routing in cognitive loop."}
+{"ts":"2026-02-13T10:30:00Z","type":"bugfix","msg":"Fixed Docker image name typo in docker-compose.yml: intuititive-identity-ai -> intuitive-ai (commit 0f04799)"}
+{"ts":"2026-02-13T10:30:00Z","type":"bugfix","msg":"Fixed missing logs directory crash: added (AGENT_HOME/'logs').mkdir(parents=True, exist_ok=True) in main.py (commit 0f04799)"}
+{"ts":"2026-02-13T11:00:00Z","type":"bugfix","msg":"Fixed empty query crash in context_assembly.py: _get_situational_memories now returns [] when query_text is empty instead of passing query='' to search_hybrid (commit 130f26e)"}
+{"ts":"2026-02-13T11:00:00Z","type":"bugfix","msg":"Fixed Telegram offset reset: after dropping pending updates, set offset=last_id+1 instead of 0 (commit 130f26e)"}
+{"ts":"2026-02-13T11:30:00Z","type":"decision","msg":"D-005: Peripheral architecture uses shared asyncio.Queue + reply_fn callbacks. D-006: Telegram uses raw httpx (no framework dep), long polling, owner-only auth."}
+{"ts":"2026-02-13T12:00:00Z","type":"kb_update","msg":"Created KB_04_peripherals.md. Updated KB_01 module map with stdin_peripheral.py and telegram_peripheral.py."}

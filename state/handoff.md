@@ -13,34 +13,6 @@
 
 ## Previous Sessions
 
-### SESSION 2026-02-10 (A+B) - FOUNDATION + COGNITIVE PIPELINE
-
-**STATUS:** DONE
-
-**What was done:**
-1. Fixed 15 syntax errors across gate.py, loop.py, main.py
-2. Implemented tasks 1-12: embeddings, schema migration, stochastic weights, layers, hybrid search, reranking, ACT-R, gates, tokens, metacognition
-3. Implemented tasks 13-17: hybrid relevance, attention allocation, context assembly, FIFO pruning, cognitive loop rewrite
-
-**Verifications PASSED:**
-- All src/*.py files py_compile clean
-- Structural checks pass on all modules
-
-| File | What was done |
-|------|---------------|
-| `src/memory.py` | task_type, prefixes, halfvec, embed_batch, search_hybrid, search_reranked |
-| `src/stochastic.py` | NEW - Beta distribution StochasticWeight class |
-| `src/activation.py` | NEW - ACT-R 4-component activation equation |
-| `src/metacognition.py` | NEW - composite confidence scoring |
-| `src/tokens.py` | NEW - token counting utilities |
-| `src/gate.py` | REWRITTEN - 3x3 matrix exit gate + entry gate |
-| `src/relevance.py` | NEW - 5-component hybrid relevance + Dirichlet |
-| `src/attention.py` | NEW - salience-based attention allocation |
-| `src/context_assembly.py` | NEW - dynamic context injection + FIFO |
-| `src/loop.py` | REWRITTEN - attention-agnostic cognitive loop |
-
----
-
 ### SESSION 2026-02-11 (C+D+E) - SAFETY + CONSOLIDATION + PERIPHERALS
 
 **STATUS:** DONE
@@ -50,59 +22,66 @@
 2. Tasks 23-28: two-tier consolidation engine (constant + deep)
 3. Tasks 29-35: DMN idle loop, energy tracking, session restart, docs, gut feeling, bootstrap readiness, outcome tracking
 
-**Verifications PASSED:**
-- All src/*.py files py_compile clean
-- Safety: hard ceiling blocks at >0.95, diminishing returns correct
-- Consolidation: clustering finds correct groups
-- Gut: centroid math correct, delta nonzero
-
-| File | What was done |
-|------|---------------|
-| `src/safety.py` | SafetyMonitor + 6 ceilings (3 phases) + OutcomeTracker |
-| `src/consolidation.py` | REWRITTEN - ConstantConsolidation + DeepConsolidation |
-| `src/idle.py` | REWRITTEN - full DMN with 4 bias types, 3 output channels |
-| `src/llm.py` | EnergyTracker class added |
-| `src/gut.py` | NEW - two-centroid gut feeling model |
-| `src/bootstrap.py` | NEW - 10 readiness milestones |
-| `src/main.py` | ConsolidationEngine, DMN queue, session restart tracking |
-
 ---
 
 ### SESSION 2026-02-12 (F) - FRAMEWORK ADOPTION + WIRE PHASE
 
-**STATUS:** DOING
+**STATUS:** DONE
 
 **What was done:**
 1. Adopted AI-DEV framework (taskmaster.py, state/, prompts/, KB/)
-2. Filled charter.json with project context
-3. Created roadmap.json with 4 done grouped tasks + 6 next-phase tasks
-4. Migrated SESSION_HANDOFF.md to this file
-5. FW-001 DONE — framework fully adopted
-6. Added unattended execution directive to CLAUDE.md (temporary, removed by CLEANUP-001)
-7. Added CLEANUP-001 task to roadmap (depends on TEST-002)
-8. WIRE-001 DONE — GutFeeling wired into cognitive loop:
-   - `gut = GutFeeling()` instantiated in loop, subconscious seeded from L0/L1
-   - `gut.update_attention()` + `gut.compute_delta()` called each cycle
-   - `gut.emotional_charge` passed to attention.select_winner()
-   - `gut.gut_summary()` injected into system prompt
-   - `relevance.py` parameter renamed gut_delta→gut_alignment for direct use
-   - `/status` shows gut summary
-9. WIRE-002 DONE — BootstrapReadiness wired into cognitive loop:
-   - Persistent `BootstrapReadiness` instance in loop
-   - `check_all()` at session start + after each exit gate flush
-   - Bootstrap prompt injected into system prompt when milestones incomplete
-   - `/readiness` uses persistent instance
-10. WIRE-003 DONE — OutcomeTracker wired into safety + consolidation:
-   - `OutcomeTracker` instantiated in loop, attached to `memory.outcome_tracker`
-   - Gate persist/drop decisions recorded in `_flush_scratch_through_exit_gate`
-   - Consolidation promotions (goal + identity) recorded in `_promote_patterns`
-   - `gut.link_outcome()` called after each gate decision
+2. FW-001 DONE — framework fully adopted
+3. WIRE-001 DONE — GutFeeling wired into cognitive loop
+4. WIRE-002 DONE — BootstrapReadiness wired into cognitive loop
+5. WIRE-003 DONE — OutcomeTracker wired into safety + consolidation
+
+---
+
+### SESSION 2026-02-13 (G) - PERIPHERAL ARCHITECTURE + TELEGRAM
+
+**STATUS:** IN PROGRESS — NEED TO FINISH DEPLOY + TEST
+
+**What was done:**
+1. Cleaned norisor of all old files (src/, .git, docs). Only .env, docker-compose.yml, agent-state/ remain.
+2. Fixed Docker image name: `ghcr.io/stonks-git/intuitive-ai:latest` (was typo `intuititive-identity-ai`)
+3. Fixed main.py: create `~/.agent/logs/` dir on startup (FileNotFoundError)
+4. **PERIPHERAL ARCHITECTURE BUILT** — the big feature this session:
+   - `src/stdin_peripheral.py` NEW — stdin factored out as a peripheral
+   - `src/telegram_peripheral.py` NEW — raw httpx Telegram Bot API (long polling, owner-only auth)
+   - `src/loop.py` MODIFIED — replaced hardcoded stdin with unified `input_queue: asyncio.Queue`
+     - All peripherals push `AttentionCandidate` objects into shared queue
+     - `reply_fn` callback in candidate metadata routes responses back to correct peripheral
+     - `_handle_command()` now uses `_send()` helper that routes to reply_fn or stdout
+     - Removed `sys.stdin.readline` and `dmn_queue` param
+   - `src/idle.py` MODIFIED — renamed `dmn_queue` → `input_queue` (DMN pushes to shared queue)
+   - `src/main.py` MODIFIED — creates shared `input_queue(maxsize=50)`, wires stdin + telegram + idle
+   - `src/context_assembly.py` MODIFIED — fixed pre-existing bug: `query=""` crashed embed API.
+     Now passes `attention_text=winner.content` from loop through to `search_hybrid`.
+5. Telegram bot created: `@alecprats_ai_bot`
+   - Token + owner_id configured in norisor `.env`
+   - `api.telegram.org` added to containment.yaml whitelist
+6. First deploy test: agent started, Telegram connected, bot received message, won attention.
+   Crashed on context_assembly empty query bug (fixed in commit 130f26e).
+
+**WHAT REMAINS (next session must do):**
+1. **Wait for CI/CD build of commit 130f26e** (was building when session ended)
+2. **Pull new image on norisor**: `ssh norisor "cd ~/agent-runtime && docker pull ghcr.io/stonks-git/intuitive-ai:latest"`
+3. **Restart agent**: `ssh norisor "cd ~/agent-runtime && docker compose down && docker compose up -d"`
+4. **Test from Telegram**: send a message to @alecprats_ai_bot — should get a response
+5. **Test introspection commands**: `/status`, `/readiness`, `/cost` from Telegram
+6. If all works → mark PERIPH-001 done, update roadmap
+7. Then proceed with TEST-001 (full end-to-end test)
+
+**Commits this session:**
+- `0f04799` Fix Docker image name and ensure logs directory exists
+- `a5442e8` Add peripheral architecture: Telegram + stdin input, unified queue
+- `130f26e` Fix empty query crash in context assembly + telegram offset
 
 ---
 
 ## What is this project?
 
-Cognitive architecture for emergent AI identity. Three-layer memory unified into one Postgres store with continuous depth_weight (Beta distribution). Dual-process reasoning (System 1: Gemini Flash Lite, System 2: Claude Sonnet 4.5). Metacognitive monitoring. Consolidation sleep cycle. DMN idle loop. Two-centroid gut feeling model. Identity emerges from experience, not configuration. All 35 implementation plan tasks complete. Currently in integration wiring phase.
+Cognitive architecture for emergent AI identity. Three-layer memory unified into one Postgres store with continuous depth_weight (Beta distribution). Dual-process reasoning (System 1: Gemini Flash Lite, System 2: Claude Sonnet 4.5). Metacognitive monitoring. Consolidation sleep cycle. DMN idle loop. Two-centroid gut feeling model. Identity emerges from experience, not configuration. All 35 implementation plan tasks complete. Peripheral architecture built. Currently testing Telegram integration.
 
 ---
 
@@ -111,10 +90,11 @@ Cognitive architecture for emergent AI identity. Three-layer memory unified into
 | Task ID | Status |
 |---------|--------|
 | FW-001 | done |
-| WIRE-001 | done |
-| WIRE-002 | done |
-| WIRE-003 | done |
-| TEST-001 | next - End-to-end runtime test on norisor |
+| WIRE-001/002/003 | done |
+| PERIPH-001 (Telegram) | IN PROGRESS — code done, need to redeploy + test |
+| TEST-001 | next after PERIPH-001 |
+
+---
 
 ## What exists
 
@@ -133,20 +113,64 @@ src/
   metacognition.py         Composite confidence scoring
   tokens.py                Token counting utilities
   gate.py                  3x3 exit gate + stochastic entry gate
-  loop.py                  Attention-agnostic cognitive loop + dual-process escalation
-  main.py                  Entry point, consolidation engine, DMN queue, session tracking
+  loop.py                  Attention-agnostic cognitive loop (unified input_queue, reply_fn routing)
+  main.py                  Entry point, consolidation engine, peripheral wiring, session tracking
   relevance.py             5-component hybrid relevance + Dirichlet blend
-  attention.py             Salience-based attention allocation
-  context_assembly.py      Dynamic context injection + FIFO pruning
+  attention.py             Salience-based attention allocation (AttentionCandidate, AttentionAllocator)
+  context_assembly.py      Dynamic context injection + FIFO pruning (fixed empty query bug)
   consolidation.py         Two-tier: ConstantConsolidation + DeepConsolidation
-  idle.py                  DMN with stochastic sampling, 3 output channels
+  idle.py                  DMN with stochastic sampling, pushes to shared input_queue
   gut.py                   Two-centroid gut feeling model
   bootstrap.py             10 readiness milestones
+  stdin_peripheral.py      NEW — stdin I/O as a peripheral (pushes AttentionCandidate to input_queue)
+  telegram_peripheral.py   NEW — Telegram Bot API via raw httpx (long polling, owner auth, reply_fn)
 ```
 
-### Remote database (norisor, port 5433)
+### Peripheral Architecture (NEW)
 
-Fully migrated. memories table has halfvec(768), Beta distribution columns, full-text search, access_timestamps, memory_co_access table. 6 test memories.
+```
+                    ┌──────────────┐
+                    │  input_queue  │  asyncio.Queue(maxsize=50)
+                    │  (shared)     │
+                    └──────┬───────┘
+                           │
+        ┌──────────────────┼──────────────────┐
+        │                  │                  │
+   StdinPeripheral   TelegramPeripheral    IdleLoop (DMN)
+   (push external_user)  (push external_user)  (push internal_dmn)
+        │                  │                  │
+        │           reply_fn=sendMessage      │
+        │                  │                  │
+        └──────────────────┼──────────────────┘
+                           │
+                    cognitive_loop drains queue
+                    → attention allocation
+                    → context assembly
+                    → LLM call
+                    → reply via winner.metadata["reply_fn"]
+```
+
+Key design:
+- All peripherals push `AttentionCandidate` objects into one queue
+- Each candidate carries `metadata["reply_fn"]` — async callback to route response
+- Telegram: reply_fn calls `sendMessage` API
+- Stdin: reply_fn calls `print()`
+- DMN: no reply_fn (internal thoughts log-only)
+- Loop doesn't know or care where input came from
+
+### Norisor setup (CLEAN)
+
+```
+~/agent-runtime/
+  .env                 API keys + TELEGRAM_BOT_TOKEN + TELEGRAM_OWNER_ID
+  docker-compose.yml   agent_001 + agent_postgres (correct image name)
+  agent-state/         config/, identity/, goals/, logs/, manifest.json
+```
+
+- No src files on norisor (Docker-only deployment)
+- Image: `ghcr.io/stonks-git/intuitive-ai:latest`
+- Postgres data volume preserved (6 memories)
+- CI/CD: push to main → GitHub Actions → build image → pull on norisor
 
 ### Connection info
 
@@ -155,6 +179,8 @@ Fully migrated. memories table has halfvec(768), Beta distribution columns, full
 - **SSH:** `ssh norisor` (configured in ~/.ssh/config)
 - **DB:** `postgresql://agent:agent_secret@localhost:5433/agent_memory`
 - **Deploy:** Push to main -> GitHub Actions -> Docker -> norisor
+- **Telegram bot:** @alecprats_ai_bot (token in norisor .env)
+- **Telegram owner ID:** 6639032827
 
 ---
 
@@ -162,7 +188,8 @@ Fully migrated. memories table has halfvec(768), Beta distribution columns, full
 
 - Docker Compose on norisor: agent container (2 CPU/2GB) + postgres container (1 CPU/1GB)
 - CI/CD: GitHub Actions builds on push to main (src/, Dockerfile, requirements.txt, docker-compose.yml)
-- Image: ghcr.io/stonks-git/intuititive-identity-ai:latest
+- Image: ghcr.io/stonks-git/intuitive-ai:latest
+- Norisor cleaned: only docker-compose.yml + .env + agent-state/ (no old src/docs)
 
 ---
 
@@ -170,8 +197,11 @@ Fully migrated. memories table has halfvec(768), Beta distribution columns, full
 
 | Blocker/Question | Status |
 |------------------|--------|
-| GutFeeling, Bootstrap, OutcomeTracker not wired into loop | Next tasks (WIRE-001/002/003) |
-| No runtime test yet (only py_compile) | Blocked by wiring |
+| ~~GutFeeling, Bootstrap, OutcomeTracker not wired~~ | DONE |
+| ~~Docker image name typo~~ | FIXED (0f04799) |
+| ~~Empty query crash in context_assembly~~ | FIXED (130f26e) |
+| Need to redeploy commit 130f26e and test Telegram | NEXT ACTION |
+| Multimodal perception layer (images/audio in attention loop) | FUTURE — discussed architecture, not started |
 
 ---
 
@@ -186,16 +216,16 @@ python3 taskmaster.py ready
 
 # Local Python (use venv)
 .venv/bin/python3 -m py_compile src/foo.py
-.venv/bin/python3 -c "from src.foo import *"
 
-# Deploy to norisor
-ssh norisor
-cd ~/agent-runtime
-docker compose up -d postgres
-export GOOGLE_API_KEY=$(grep GOOGLE_API_KEY .env | cut -d= -f2)
-export ANTHROPIC_API_KEY=$(grep ANTHROPIC_API_KEY .env | cut -d= -f2)
-export DATABASE_URL="postgresql://agent:agent_secret@localhost:5433/agent_memory"
-python3 -m src.main
+# Deploy to norisor (Docker only)
+git push origin main  # triggers CI/CD
+ssh norisor "cd ~/agent-runtime && docker pull ghcr.io/stonks-git/intuitive-ai:latest && docker compose down && docker compose up -d"
+
+# Check agent logs
+ssh norisor "docker logs --tail 30 agent_001"
+
+# Check if Telegram is connected
+ssh norisor "docker logs agent_001 2>&1 | grep -i telegram"
 ```
 
 ---
@@ -206,33 +236,36 @@ python3 -m src.main
 - Identity is a rendered view of high-weight memories, not a stored artifact
 - Stochastic everything -- Beta weights, Dirichlet blends, injection rolls
 - ACT-R equations with human-calibrated starting points, evolved by consolidation
-- Attention-agnostic loop -- all input sources feed same pipeline
+- Attention-agnostic loop -- all input sources feed same pipeline via unified input_queue
 - Build all safety from day one, enable incrementally
 - Dual-process: System 1 (Gemini Flash Lite) drives, System 2 (Claude Sonnet 4.5) escalation
 - Reflection bank: System 2 corrections stored as type="correction" memories
+- Peripheral architecture: any I/O source pushes AttentionCandidate into shared queue, reply_fn routes responses back
+- Telegram: raw httpx (no framework dependency), long polling (no public endpoint), owner-only auth
+- Multimodal future: embedding stays text-based (subconscious); LLM gets full multimodal (conscious). Content type mismatch = gut delta signal.
 
 ---
 
 ## Checklist before handoff
 
-- [ ] Updated task statuses in handoff
-- [ ] Completed current session section above
-- [ ] devlog updated (+1 entry per significant change)
-- [ ] **Kept only last 3 sessions** (older ones archived in git)
-- [ ] KB updated if code was changed
+- [x] Updated task statuses in handoff
+- [x] Completed current session section above
+- [x] devlog updated
+- [x] **Kept only last 3 sessions**
+- [x] KB updated if code was changed
 
 ---
 
 ## Git Status
 
 - **Branch:** main
-- **Last commit:** d7c3b72 Wire BootstrapReadiness into cognitive loop (WIRE-002)
-- **Modified:** src/loop.py, src/consolidation.py, KB/KB_03_cognitive_loop.md, state files
+- **Last commit:** 130f26e Fix empty query crash in context assembly + telegram offset
+- **CI/CD:** Build may still be running for 130f26e — check before deploying
 
 ---
 
 ## Memory Marker
 
 ```
-MEMORY_MARKER: 2026-02-12 | FW-001 (framework adoption) | WIRE-001 (gut wiring)
+MEMORY_MARKER: 2026-02-13 | PERIPH-001 in progress | Telegram peripheral built, code committed, need redeploy+test | Next: pull image, docker compose up, test from Telegram
 ```
