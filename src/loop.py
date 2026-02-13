@@ -39,7 +39,7 @@ logger = logging.getLogger("agent.loop")
 # How many exchanges between exit gate flushes
 EXIT_GATE_FLUSH_INTERVAL = 5
 
-# Escalation tracking
+# Escalation tracking (module-level, shared with dashboard via agent_state)
 _escalation_stats = {"retries": 0, "retry_successes": 0, "escalations": 0}
 
 
@@ -312,6 +312,10 @@ async def cognitive_loop(config, layers, memory, shutdown_event, input_queue: as
     # Conversation history (rolling FIFO) — shared with dashboard if present
     conversation = agent_state.conversation if agent_state else []
     exchange_count = 0
+
+    # Share escalation stats with dashboard
+    if agent_state:
+        agent_state.escalation_stats = _escalation_stats
 
     # Ensure L0/L1 embeddings cached for context assembly
     await layers.ensure_embeddings(memory)

@@ -48,6 +48,7 @@ class AgentState:
     # Shared with cognitive_loop (same list object)
     conversation: list = field(default_factory=list)
     exchange_count: int = 0
+    escalation_stats: dict = field(default_factory=lambda: {"retries": 0, "retry_successes": 0, "escalations": 0})
 
     # SSE broadcast
     _sse_subscribers: list = field(default_factory=list)
@@ -143,6 +144,7 @@ async def api_status(request):
 
     if state.config:
         data["model"] = state.config.models.system1.model
+        data["model_s2"] = state.config.models.system2.model if state.config.models.system2 else None
 
     if state.memory:
         try:
@@ -152,6 +154,9 @@ async def api_status(request):
 
     if state.attention:
         data["attention_queue_size"] = state.attention.queue_size
+
+    if state.escalation_stats:
+        data["escalation"] = state.escalation_stats
 
     if state.bootstrap:
         achieved, total = state.bootstrap.progress
@@ -693,11 +698,13 @@ async function refreshStatus() {
     p.replaceChildren();
     p.appendChild(mkStat('Agent', d.agent_id || '-'));
     p.appendChild(mkStat('Phase', d.phase || '-'));
-    p.appendChild(mkStat('Model', d.model || '-'));
+    p.appendChild(mkStat('System 1', d.model || '-'));
+    p.appendChild(mkStat('System 2', d.model_s2 || '-'));
     p.appendChild(mkStat('Memories', d.memory_count));
     p.appendChild(mkStat('Conversation', d.conversation_length + ' msgs'));
     p.appendChild(mkStat('Exchanges/Flush', d.exchange_count + '/5'));
     p.appendChild(mkStat('Attention Queue', d.attention_queue_size));
+    if (d.escalation) p.appendChild(mkStat('Escalations', 'S2: ' + d.escalation.escalations + ', retries: ' + d.escalation.retries + ' (' + d.escalation.retry_successes + ' ok)'));
     if (d.bootstrap) p.appendChild(mkStat('Bootstrap', d.bootstrap.achieved + '/' + d.bootstrap.total));
     if (d.gut) {
       p.appendChild(mkStat('Gut', d.gut.summary));
