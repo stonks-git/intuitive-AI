@@ -13,3 +13,7 @@
 {"ts":"2026-02-13T11:00:00Z","type":"bugfix","msg":"Fixed Telegram offset reset: after dropping pending updates, set offset=last_id+1 instead of 0 (commit 130f26e)"}
 {"ts":"2026-02-13T11:30:00Z","type":"decision","msg":"D-005: Peripheral architecture uses shared asyncio.Queue + reply_fn callbacks. D-006: Telegram uses raw httpx (no framework dep), long polling, owner-only auth."}
 {"ts":"2026-02-13T12:00:00Z","type":"kb_update","msg":"Created KB_04_peripherals.md. Updated KB_01 module map with stdin_peripheral.py and telegram_peripheral.py."}
+{"ts":"2026-02-14T00:01:00+02:00","event":"bugfix","id":"PERIPH-001","summary":"Fixed stdin peripheral thread pool exhaustion: run_in_executor spawned a new thread per 1s timeout, exhausting default pool (32 threads) and starving event loop. Replaced with single persistent reader thread + asyncio bridge queue."}
+{"ts":"2026-02-14T00:02:00+02:00","event":"verification","id":"PERIPH-001","summary":"Telegram peripheral verified end-to-end: message received via getUpdates, won attention (salience=0.470), context assembled, System 1 responded, reply sent via sendMessage in ~2s. DMN continued thinking between user messages."}
+{"ts":"2026-02-14T00:03:00+02:00","event":"kb_update","id":"KB_04","summary":"Updated KB_04_peripherals.md with stdin thread safety note."}
+{"ts":"2026-02-14T00:04:00+02:00","event":"handoff","id":"SESSION-H","summary":"Session H: Fixed stdin thread leak, deployed to norisor, verified Telegram works end-to-end. PERIPH-001 DONE. Next: TEST-001."}

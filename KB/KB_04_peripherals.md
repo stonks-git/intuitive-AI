@@ -27,9 +27,10 @@ The loop checks `winner.metadata.get("reply_fn")` after generating a response. I
 ### `src/stdin_peripheral.py` (~60 lines)
 
 - `StdinPeripheral(input_queue)` — no memory needed (loop embeds for stdin)
-- `run(shutdown_event)` — `sys.stdin.readline` loop with 1s timeout via `asyncio.wait_for`
-- Skips running if stdin is not a TTY
+- `run(shutdown_event)` — single persistent reader thread + asyncio bridge queue
+- Skips running if stdin is not a TTY (auto-disabled in Docker)
 - Creates `AttentionCandidate(source_tag="external_user", metadata={"reply_fn": <print_closure>, "peripheral": "stdin"})`
+- **Thread safety**: Uses one daemon thread for blocking `readline()`, bridges to async via `asyncio.Queue`. Previous `run_in_executor` approach leaked threads (each 1s timeout spawned a new thread while old ones blocked forever on TTY readline, exhausting the default thread pool and starving the event loop).
 
 ### `src/telegram_peripheral.py` (~155 lines)
 

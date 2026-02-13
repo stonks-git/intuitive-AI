@@ -39,7 +39,7 @@
 
 ### SESSION 2026-02-13 (G) - PERIPHERAL ARCHITECTURE + TELEGRAM
 
-**STATUS:** IN PROGRESS — NEED TO FINISH DEPLOY + TEST
+**STATUS:** DONE
 
 **What was done:**
 1. Cleaned norisor of all old files (src/, .git, docs). Only .env, docker-compose.yml, agent-state/ remain.
@@ -49,33 +49,41 @@
    - `src/stdin_peripheral.py` NEW — stdin factored out as a peripheral
    - `src/telegram_peripheral.py` NEW — raw httpx Telegram Bot API (long polling, owner-only auth)
    - `src/loop.py` MODIFIED — replaced hardcoded stdin with unified `input_queue: asyncio.Queue`
-     - All peripherals push `AttentionCandidate` objects into shared queue
-     - `reply_fn` callback in candidate metadata routes responses back to correct peripheral
-     - `_handle_command()` now uses `_send()` helper that routes to reply_fn or stdout
-     - Removed `sys.stdin.readline` and `dmn_queue` param
-   - `src/idle.py` MODIFIED — renamed `dmn_queue` → `input_queue` (DMN pushes to shared queue)
-   - `src/main.py` MODIFIED — creates shared `input_queue(maxsize=50)`, wires stdin + telegram + idle
-   - `src/context_assembly.py` MODIFIED — fixed pre-existing bug: `query=""` crashed embed API.
-     Now passes `attention_text=winner.content` from loop through to `search_hybrid`.
-5. Telegram bot created: `@alecprats_ai_bot`
-   - Token + owner_id configured in norisor `.env`
-   - `api.telegram.org` added to containment.yaml whitelist
-6. First deploy test: agent started, Telegram connected, bot received message, won attention.
-   Crashed on context_assembly empty query bug (fixed in commit 130f26e).
+   - `src/idle.py` MODIFIED — renamed `dmn_queue` → `input_queue`
+   - `src/main.py` MODIFIED — creates shared `input_queue(maxsize=50)`, wires peripherals
+   - `src/context_assembly.py` MODIFIED — fixed empty query crash
+5. Telegram bot: `@alecprats_ai_bot`, token + owner_id in norisor `.env`
 
-**WHAT REMAINS (next session must do):**
-1. **Wait for CI/CD build of commit 130f26e** (was building when session ended)
-2. **Pull new image on norisor**: `ssh norisor "cd ~/agent-runtime && docker pull ghcr.io/stonks-git/intuitive-ai:latest"`
-3. **Restart agent**: `ssh norisor "cd ~/agent-runtime && docker compose down && docker compose up -d"`
-4. **Test from Telegram**: send a message to @alecprats_ai_bot — should get a response
-5. **Test introspection commands**: `/status`, `/readiness`, `/cost` from Telegram
-6. If all works → mark PERIPH-001 done, update roadmap
-7. Then proceed with TEST-001 (full end-to-end test)
-
-**Commits this session:**
+**Commits:**
 - `0f04799` Fix Docker image name and ensure logs directory exists
 - `a5442e8` Add peripheral architecture: Telegram + stdin input, unified queue
 - `130f26e` Fix empty query crash in context assembly + telegram offset
+
+---
+
+### SESSION 2026-02-14 (H) - DEPLOY + TEST + PERIPH-001 DONE
+
+**STATUS:** DONE
+
+**What was done:**
+1. Completed session G documentation (KB_04, roadmap PERIPH-001, devlog entries)
+2. Fixed stdin peripheral thread pool exhaustion bug:
+   - `run_in_executor` spawned a new thread every 1s for `readline`, old threads hung forever (Docker `tty: true`)
+   - After 32 threads (default pool), entire event loop starved — Telegram polling stopped
+   - Fix: single persistent reader thread + asyncio bridge queue
+3. Removed `stdin_open: true` and `tty: true` from norisor docker-compose.yml (Telegram is primary interface)
+4. Deployed fixed image to norisor, agent started cleanly
+5. **TELEGRAM VERIFIED END-TO-END:**
+   - Message received via getUpdates → won attention (salience=0.470)
+   - Context assembled (identity + situational + safety) → System 1 (Gemini Flash Lite) responded
+   - Reply sent via sendMessage in ~2 seconds
+   - DMN continued thinking between user messages
+   - Safety ceilings enforced (diminishing_returns active, two_gate in shadow)
+6. PERIPH-001 marked DONE in roadmap
+
+**Commits:**
+- `56bf262` Document peripheral architecture (session G): KB, roadmap, devlog, handoff
+- `3cdfb95` Fix stdin peripheral thread pool exhaustion in Docker
 
 ---
 
@@ -91,8 +99,8 @@ Cognitive architecture for emergent AI identity. Three-layer memory unified into
 |---------|--------|
 | FW-001 | done |
 | WIRE-001/002/003 | done |
-| PERIPH-001 (Telegram) | IN PROGRESS — code done, need to redeploy + test |
-| TEST-001 | next after PERIPH-001 |
+| PERIPH-001 (Telegram) | DONE — verified end-to-end |
+| TEST-001 | NEXT — full end-to-end runtime test |
 
 ---
 
@@ -122,7 +130,7 @@ src/
   idle.py                  DMN with stochastic sampling, pushes to shared input_queue
   gut.py                   Two-centroid gut feeling model
   bootstrap.py             10 readiness milestones
-  stdin_peripheral.py      NEW — stdin I/O as a peripheral (pushes AttentionCandidate to input_queue)
+  stdin_peripheral.py      NEW — stdin I/O as peripheral (single reader thread, disabled in Docker)
   telegram_peripheral.py   NEW — Telegram Bot API via raw httpx (long polling, owner auth, reply_fn)
 ```
 
@@ -200,7 +208,8 @@ Key design:
 | ~~GutFeeling, Bootstrap, OutcomeTracker not wired~~ | DONE |
 | ~~Docker image name typo~~ | FIXED (0f04799) |
 | ~~Empty query crash in context_assembly~~ | FIXED (130f26e) |
-| Need to redeploy commit 130f26e and test Telegram | NEXT ACTION |
+| ~~Redeploy and test Telegram~~ | DONE — verified end-to-end (session H) |
+| ~~Stdin thread pool exhaustion in Docker~~ | FIXED (3cdfb95) |
 | Multimodal perception layer (images/audio in attention loop) | FUTURE — discussed architecture, not started |
 
 ---
@@ -259,13 +268,14 @@ ssh norisor "docker logs agent_001 2>&1 | grep -i telegram"
 ## Git Status
 
 - **Branch:** main
-- **Last commit:** 130f26e Fix empty query crash in context assembly + telegram offset
-- **CI/CD:** Build may still be running for 130f26e — check before deploying
+- **Last commit:** 3cdfb95 Fix stdin peripheral thread pool exhaustion in Docker
+- **CI/CD:** All builds passing. Agent deployed and running on norisor.
+- **Agent status:** RUNNING on norisor, Telegram connected, accepting messages
 
 ---
 
 ## Memory Marker
 
 ```
-MEMORY_MARKER: 2026-02-13 | PERIPH-001 in progress | Telegram peripheral built, code committed, need redeploy+test | Next: pull image, docker compose up, test from Telegram
+MEMORY_MARKER: 2026-02-14 | PERIPH-001 DONE | Agent live on norisor, Telegram working | Next: TEST-001 (full end-to-end test)
 ```
